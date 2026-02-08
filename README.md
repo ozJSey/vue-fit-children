@@ -1,5 +1,7 @@
 # v-fit-children
 
+## Vue directive to hide overflowing children automagically ‼️
+
 > **Note:** Watch the [usage example video](https://github.com/ozJSey/v-fit-children-resources/blob/main/Screen%20Recording%202026-02-08%20at%2019.09.25.mov) to see the directive in action (temporary link).
 
 A Vue 3 directive that automatically hides child elements that don't fit within a container's width. Ideal for chips, badges, tags, or any inline elements in a tight space.
