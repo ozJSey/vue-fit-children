@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>v-fit-children Playground</title>
+  <style>
+    :root {
+      font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+      line-height: 1.5;
+      color-scheme: light dark;
+      background-color: #f9f9f9;
+      color: #213547;
+    }
+
+    body {
+      margin: 0;
+      display: flex;
+      place-items: center;
+      min-width: 320px;
+      min-height: 100vh;
+      flex-direction: column;
+      padding: 2rem;
+    }
+
+    h1 { font-size: 2em; margin-bottom: 0.5em; }
+    h2 { font-size: 1.2em; margin-top: 2em; margin-bottom: 0.5em; }
+    
+    .playground-section {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+      width: 100%;
+      max-width: 800px;
+      border: 1px solid #ddd;
+    }
+
+    .controls {
+      margin-bottom: 1rem;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    button {
+      border: 1px solid transparent;
+      padding: 0.6em 1.2em;
+      font-size: 1em;
+      font-weight: 500;
+      font-family: inherit;
+      background-color: #646cff;
+      color: white;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: border-color 0.25s;
+    }
+    button:hover { background-color: #535bf2; }
+    button.secondary { background-color: #888; }
+
+    /* The resizeable container wrapper */
+    .resize-wrapper {
+      border: 2px dashed #ccc;
+      padding: 10px;
+      resize: horizontal;
+      overflow: auto;
+      max-width: 100%;
+      min-width: 200px;
+      background: #fafafa;
+      position: relative;
+    }
+    
+    .resize-wrapper::after {
+      content: "Drag handle ↘ to resize";
+      position: absolute;
+      bottom: 2px;
+      right: 2px;
+      font-size: 0.7em;
+      color: #999;
+      pointer-events: none;
+    }
+
+    /* The actual flex container */
+    .chips-container {
+      display: flex;
+      flex-wrap: nowrap; /* Essential for this directive */
+      /* gap: 8px;  Supported by directive! */
+      align-items: center;
+      box-sizing: border-box;
+      /* height: 40px; */
+    }
+
+    .chip {
+      display: flex;
+      padding: 4px 12px;
+      background: #e0e0e0;
+      border-radius: 16px;
+      white-space: nowrap;
+      border: 1px solid #ccc;
+      font-size: 0.9em;
+    }
+    
+    .chip.blue { background: #dbeafe; border-color: #93c5fd; color: #1e40af; }
+    .chip.green { background: #dcfce7; border-color: #86efac; color: #166534; }
+    .chip.purple { background: #f3e8ff; border-color: #d8b4fe; color: #6b21a8; }
+
+    .more-badge {
+      padding: 4px 8px;
+      font-size: 0.8em;
+      color: #666;
+      background: #eee;
+      border-radius: 4px;
+      margin-left: 8px;
+      white-space: nowrap;
+    }
+
+    /* Avatar specific styles */
+    .avatar-container {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: #ddd;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      color: #555;
+      border: 2px solid white;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      flex-shrink: 0;
+    }
+
+    input.edit-me {
+      padding: 4px;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+    }
+  </style>
+
+  <!-- IMPORTANT: Import Vue from CDN for this standalone playground -->
+  <script type="importmap">
+    {
+      "imports": {
+        "vue": "https://unpkg.com/vue@3/dist/vue.esm-browser.js"
+      }
+    }
+  </script>
+</head>
+<body>
+
+<div id="app">
+  <h1>v-fit-children Playground</h1>
+  <p>Open <b>dist/vFitChildren.js</b> must verify built successfully before running this file.</p>
+
+  <!-- Case 1: Standard Chips -->
+  <div class="playground-section">
+    <h2>1. Standard Chips (Resize Me)</h2>
+    <div class="controls">
+      <button @click="addChip">Add Chip</button>
+      <button class="secondary" @click="removeChip">Remove Chip</button>
+      <label>
+        <input type="checkbox" v-model="useGap"> Use Gap (10px)
+      </label>
+    </div>
+
+    <!-- Container wrapper with resize handle -->
+    <div class="resize-wrapper" ref="wrapper1" style="width: 400px;">
+      <!-- Actual container for directive -->
+      <div 
+        class="chips-container" 
+        :style="{ gap: useGap ? '10px' : '0' }"
+        v-fit-children="{ 
+          widthRestrictingContainer: wrapper1, 
+          offsetNeededInPx: 80 
+        }"
+        @fit-children-updated="onUpdate1"
+      >
+        <div 
+          v-for="(chip, i) in chips" 
+          :key="chip.id" 
+          class="chip"
+          :class="['blue', 'green', 'purple'][i % 3]"
+        >
+          {{ chip.text }} ({{i}})
+        </div>
+      </div>
+    </div>
+    
+    <div v-if="hiddenCount1 > 0" class="more-badge" style="margin-top: 10px; display: inline-block;">
+      +{{ hiddenCount1 }} more items hidden
+    </div>
+  </div>
+
+  <!-- Case 2: Avatars (Greedy / SortBySize) -->
+  <div class="playground-section" style="margin-top: 20px;">
+    <h2>2. Avatars (Sort By Size = {{ sortBySize }})</h2>
+    <p>Try mixing large and small items. If sorted, small ones should stay visible.</p>
+    <div class="controls">
+      <button @click="sortBySize = !sortBySize">Toggle sortBySize</button>
+      <button @click="addAvatar(30)">Add Small (30px)</button>
+      <button @click="addAvatar(80)">Add Large (80px)</button>
+    </div>
+
+    <div class="resize-wrapper" ref="wrapper2" style="width: 300px;">
+      <div 
+        class="avatar-container"
+        v-fit-children="{
+          widthRestrictingContainer: wrapper2,
+          sortBySize: sortBySize
+        }"
+        @fit-children-updated="onUpdate2"
+      >
+        <div 
+          v-for="av in avatars" 
+          :key="av.id" 
+          class="avatar"
+          :style="{ width: av.size + 'px', height: '40px', borderRadius: '20px', background: av.color }"
+        >
+          {{ av.size }}
+        </div>
+      </div>
+    </div>
+    <div v-if="hiddenCount2 > 0" class="more-badge" style="margin-top: 10px;">
+        +{{ hiddenCount2 }} avatars hidden
+    </div>
+  </div>
+
+  <!-- Case 3: Dynamic Child Content -->
+  <div class="playground-section" style="margin-top: 20px;">
+    <h2>3. Dynamic Child Content</h2>
+    <p>Note: Regular text changes inside a child won't trigger re-calc automatically unless you force it or add/remove nodes.
+       Use "Force Update" if the mutation is internal to a node.</p>
+    
+    <div class="resize-wrapper" ref="wrapper3" style="width: 350px;">
+      <div 
+        class="chips-container" 
+        style="gap: 5px;"
+        v-fit-children="{ 
+          widthRestrictingContainer: wrapper3,
+          offsetNeededInPx: 100 
+        }"
+        @fit-children-updated="onUpdate3"
+        :key="updateKey" 
+      >
+        <div class="chip blue">Fixed</div>
+        <div class="chip blue">Fixed</div>
+        <!-- Editable Child -->
+        <div class="chip green" style="padding:0">
+           <input class="edit-me" v-model="inputText" placeholder="Type to grow..." />
+        </div>
+        <div class="chip blue">Fixed</div>
+        <div class="chip blue">Fixed</div>
+      </div>
+    </div>
+    
+    <div class="controls" style="margin-top: 10px;">
+       <button @click="forceUpdate" class="secondary">Force Update (Key Change)</button>
+       <span class="more-badge" v-if="hiddenCount3 > 0">+{{ hiddenCount3 }} hidden</span>
+    </div>
+  </div>
+
+  <!-- Case 4: Input with Auto-Grow -->
+  <div class="playground-section" style="margin-top: 20px;">
+    <h2>4. Input inside Chip (Typing Test & Priority)</h2>
+    <p>
+      Type in the input below. The input is protected via <code>data-v-fit-keep</code> and <code>keepVisibleEl</code>. Uncheck to see what happens without protection.
+    </p>
+    
+    <div class="resize-wrapper" ref="wrapper4" style="width: 400px; transition: width 0.3s;">
+      <div 
+        class="chips-container" 
+        style="gap: 8px;"
+        v-fit-children="{
+          widthRestrictingContainer: wrapper4, 
+          offsetNeededInPx: 100,
+          keepVisibleEl: keepInput ? inputRef : null
+        }"
+        @fit-children-updated="onUpdate4"
+      >
+        <div class="chip blue">Msg:</div>
+        <div class="chip blue">To: Team</div>
+        <div
+           class="chip green"
+           style="padding: 0 8px; display: flex; align-items: center;"
+           data-v-fit-keep
+        >
+          <!-- Growing input using styling -->
+          <input 
+            v-model="inputVal" 
+            ref="inputRef"
+            :style="{ width: Math.max(5, inputVal.length) + 'ch' }"
+            style="min-width: 50px; padding: 4px; border: 1px solid #ccc; border-radius: 4px;"
+            placeholder="Type..."
+          />
+        </div>
+        <div class="chip purple">Send</div>
+        <div class="chip blue">Attach</div>
+        <div class="chip blue">Format</div>
+      </div>
+    </div>
+    
+    <div class="controls" style="margin-top: 10px; align-items: center;">
+        <label style="margin-right: 15px; cursor: pointer;">
+          <input type="checkbox" v-model="keepInput" /> 
+          <b>Keep Input Visible (via keepVisibleEl)</b>
+        </label>
+        
+        <div v-if="hiddenCount4 > 0" class="more-badge">+{{ hiddenCount4 }} hidden</div>
+    </div>
+  </div>
+
+  <!-- Case 5: Search Autocomplete -->
+  <div class="playground-section" style="margin-top: 20px;">
+    <h2>5. Search Autocomplete (Input + Dropdown)</h2>
+    <p>
+      Select fruits from the dropdown. Selected items become chips.
+      <br>The input stays visible via <code>data-v-fit-keep</code>. Overflow chips are hidden.
+    </p>
+
+    <div class="resize-wrapper" ref="wrapper6" style="width: 500px; position: relative;">
+      <!-- Selected chips + input row -->
+      <div
+        class="chips-container"
+        style="gap: 5px; flex-wrap: nowrap;"
+        v-fit-children="{ widthRestrictingContainer: wrapper6, offsetNeededInPx: 80 }"
+        @fit-children-updated="onUpdate6"
+        @click="focusSearch"
+      >
+        <!-- Selected Chips -->
+        <div
+          v-for="fruit in selectedFruits"
+          :key="fruit"
+          class="chip purple"
+          style="display: flex; align-items: center; gap: 6px;"
+        >
+          {{ fruit }}
+          <button
+            @click.stop="deselectFruit(fruit)"
+            style="
+              background: none;
+              border: none;
+              padding: 0;
+              color: inherit;
+              cursor: pointer;
+              font-size: 1.2em;
+              display: flex;
+              align-items: center;
+              line-height: 1;
+              opacity: 0.6;
+            "
+            onmouseover="this.style.opacity='1'"
+            onmouseout="this.style.opacity='0.6'"
+          >&times;</button>
+        </div>
+
+        <!-- Search Input (Always Kept) -->
+        <div class="chip" style="padding: 0; background: transparent; border: none; flex-shrink: 1; min-width: 80px;" data-v-fit-keep>
+           <input
+             ref="searchInputRef"
+             v-model="searchTerm"
+             @focus="dropdownOpen = true"
+             @blur="onSearchBlur"
+             @keydown.backspace="onBackspace"
+             placeholder="Search fruits..."
+             style="padding: 6px; border: none; outline: none; width: 100%; background: transparent; font-size: 0.9em;"
+           />
+        </div>
+      </div>
+
+      <!-- Dropdown -->
+      <div
+        v-if="dropdownOpen && dropdownOptions.length > 0"
+        style="
+          position: absolute;
+          top: 100%;
+          left: 0;
+          right: 0;
+          z-index: 100;
+          background: white;
+          border: 1px solid #ddd;
+          border-top: none;
+          border-radius: 0 0 8px 8px;
+          box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+          max-height: 200px;
+          overflow-y: auto;
+        "
+      >
+        <div
+          v-for="opt in dropdownOptions"
+          :key="opt"
+          @mousedown.prevent="selectFruit(opt)"
+          style="
+            padding: 8px 12px;
+            cursor: pointer;
+            font-size: 0.9em;
+            transition: background 0.1s;
+          "
+          onmouseover="this.style.background='#f3e8ff'"
+          onmouseout="this.style.background=''"
+        >
+          {{ opt }}
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top: 10px; display: flex; align-items: center; gap: 10px;">
+      <span class="more-badge" v-if="hiddenCount6 > 0">+{{ hiddenCount6 }} more selected</span>
+      <small style="color: #666;">v-model: [{{ selectedFruits.join(', ') }}]</small>
+    </div>
+  </div>
+
+  <h1>Complex examples:</h1>
+   <!-- Case 6: Inline Badge Example -->
+  <div class="playground-section" style="margin-top: 20px;">
+    <h2>6. Inline Badge Layout</h2>
+    <p>
+      To keep the indicator inline, wrap the container and badge in a flex parent.
+      <br>The directive container is <code>flex: 1</code> so it shrinks when the badge appears.
+    </p>
+
+    <!-- Flex Parent -->
+    <div class="resize-wrapper" ref="wrapper5" style="width: 400px; display: flex; align-items: center; gap: 8px;">
+      
+      <!-- Directive Container (takes available space) -->
+      <div 
+        class="chips-container" 
+        style="flex: 1; overflow: hidden; gap: 4px;"
+        v-fit-children="{ widthRestrictingContainer: wrapper5, offsetNeededInPx: 0 }"
+        @fit-children-updated="onUpdate5"
+      >
+        <div class="chip blue" v-for="item in inlineItems" :key="item">Item {{item}}</div>
+      </div>
+      
+      <!-- Inline Badge (Only appears if hidden items exist) -->
+      <div v-if="hiddenCount5 > 0" class="more-badge" style="margin: 0; white-space: nowrap;">
+        +{{ hiddenCount5 }}
+      </div>
+
+    </div>
+    
+    <div class="controls" style="margin-top: 10px;">
+        <button @click="addInlineItem">Add Item</button>
+        <button class="secondary" @click="removeInlineItem">Remove Item</button>
+    </div>
+  </div>
+
+  <!-- Case 7: Multi-Row Support -->
+  <div class="playground-section" style="margin-top: 20px;">
+    <h2>7. Multi-Row (rowCount = {{ rowCount }})</h2>
+    <p>Allow items to wrap into specified number of rows before hiding.</p>
+    
+    <div class="resize-wrapper" ref="wrapper7" style="width: 400px; height: auto;">
+      <div 
+        class="chips-container" 
+        style="gap: 8px; flex-wrap: wrap;" 
+        v-fit-children="{ widthRestrictingContainer: wrapper7, rowCount, sortBySize: sortBySize7 }"
+        @fit-children-updated="onUpdate7"
+      >
+        <div v-for="(item, i) in multiItems" :key="item" class="chip blue" style="display: flex; align-items: center; gap: 6px;">
+          {{ item }} {{ i * i % 10}}
+          <button
+            @click="multiItems.splice(i, 1)"
+            style="
+              background: none;
+              border: none;
+              padding: 0;
+              color: inherit;
+              cursor: pointer;
+              font-size: 1.2em;
+              display: flex;
+              align-items: center;
+              line-height: 1;
+              opacity: 0.6;
+            "
+            onmouseover="this.style.opacity='1'"
+            onmouseout="this.style.opacity='0.6'"
+          >&times;</button>
+        </div>
+      </div>
+    </div>
+    
+    <div class="controls" style="margin-top: 10px;">
+        <button @click="rowCount = 1">1 Row</button>
+        <button @click="rowCount = 2">2 Rows</button>
+        <button @click="rowCount = 3">3 Rows</button>
+        <label style="cursor: pointer;">
+          <input type="checkbox" v-model="sortBySize7" /> Sort by size
+        </label>
+        <span class="more-badge" v-if="hiddenCount7 > 0">+{{ hiddenCount7 }} more</span>
+    </div>
+  </div>
+
+</div>
+
+<script type="module">
+import { createApp, ref, reactive, computed } from 'vue';
+// Import the compiled directive from the local dist folder
+import { vFitChildren } from './dist/vFitChildren.js';
+
+createApp({
+  setup() {
+    // --- Case 1 ---
+    const wrapper1 = ref(null);
+    const hiddenCount1 = ref(0);
+    const useGap = ref(true);
+    const chips = ref([
+      { id: 1, text: 'Vue.js' },
+      { id: 2, text: 'React' },
+      { id: 3, text: 'Angular' },
+      { id: 4, text: 'Svelte' },
+      { id: 5, text: 'Solid' },
+      { id: 6, text: 'Qwik' },
+    ]);
+
+    const addChip = () => {
+      const id = Date.now();
+      chips.value.push({ id, text: `Item ${chips.value.length + 1}` });
+    };
+    const removeChip = () => chips.value.pop();
+    const onUpdate1 = (e) => {
+      hiddenCount1.value = e.detail.hiddenChildrenCount;
+      console.log('Update 1:', e.detail);
+    };
+
+    // --- Case 2 ---
+    const wrapper2 = ref(null);
+    const hiddenCount2 = ref(0);
+    const sortBySize = ref(false);
+    const avatars = ref([
+       { id: 1, size: 40, color: '#ffadad' },
+       { id: 2, size: 80, color: '#ffd6a5' }, // Big
+       { id: 3, size: 30, color: '#fdffb6' }, // Small
+       { id: 4, size: 30, color: '#caffbf' }, // Small
+       { id: 5, size: 40, color: '#9bf6ff' },
+       { id: 6, size: 90, color: '#a0c4ff' }, // Big
+    ]);
+    
+    const addAvatar = (size) => {
+      avatars.value.push({
+        id: Date.now(),
+        size,
+        color: '#' + Math.floor(Math.random()*16777215).toString(16)
+      });
+    }
+
+    const onUpdate2 = (e) => {
+      hiddenCount2.value = e.detail.hiddenChildrenCount;
+    };
+
+    // --- Case 3 ---
+    const wrapper3 = ref(null);
+    const hiddenCount3 = ref(0);
+    const inputText = ref("Edit me");
+    const updateKey = ref(0);
+    
+    const forceUpdate = () => {
+       updateKey.value++;
+    }
+    const onUpdate3 = (e) => hiddenCount3.value = e.detail.hiddenChildrenCount;
+
+    // --- Case 4 ---
+    const wrapper4 = ref(null);
+    const hiddenCount4 = ref(0);
+    const inputVal = ref("Grow me");
+    const keepInput = ref(true);
+    const inputRef = ref(null);
+    const onUpdate4 = (e) => hiddenCount4.value = e.detail.hiddenChildrenCount;
+
+    // --- Case 5 ---
+    const wrapper5 = ref(null);
+    const hiddenCount5 = ref(0);
+    const inlineItems = ref(Array.from({length: 10}, (_, i) => i + 1));
+    const onUpdate5 = (e) => hiddenCount5.value = e.detail.hiddenChildrenCount;
+    const addInlineItem = () => inlineItems.value.push(inlineItems.value.length + 1);
+    const removeInlineItem = () => inlineItems.value.pop();
+
+    // --- Case 6 ---
+    const wrapper6 = ref(null);
+    const hiddenCount6 = ref(0);
+    const searchTerm = ref("");
+    const searchInputRef = ref(null);
+    const dropdownOpen = ref(false);
+    const allFruits = ["Apple", "Apricot", "Avocado", "Banana", "Blackberry", "Blueberry", "Cherry", "Cranberry", "Date", "Dragonfruit", "Elderberry", "Fig", "Grape", "Guava", "Honeydew", "Kiwi", "Lemon", "Lime", "Mango", "Melon", "Nectarine", "Orange", "Papaya", "Peach", "Pear", "Plum", "Pineapple", "Raspberry", "Strawberry", "Tangerine", "Watermelon"];
+    const selectedFruits = ref(["Apple", "Banana", "Cherry"]);
+
+    const dropdownOptions = computed(() => {
+      const available = allFruits.filter(f => !selectedFruits.value.includes(f));
+      if (!searchTerm.value) return available;
+      return available.filter(f => f.toLowerCase().includes(searchTerm.value.toLowerCase()));
+    });
+
+    const selectFruit = (fruit) => {
+      if (!selectedFruits.value.includes(fruit)) {
+        selectedFruits.value.push(fruit);
+      }
+      searchTerm.value = "";
+      dropdownOpen.value = false;
+    };
+
+    const deselectFruit = (fruit) => {
+      selectedFruits.value = selectedFruits.value.filter(f => f !== fruit);
+    };
+
+    const focusSearch = () => {
+      searchInputRef.value?.focus();
+    };
+
+    const onSearchBlur = () => {
+      // Small delay so mousedown on dropdown option fires first
+      setTimeout(() => { dropdownOpen.value = false; }, 150);
+    };
+
+    const onBackspace = () => {
+      if (!searchTerm.value && selectedFruits.value.length > 0) {
+        selectedFruits.value.pop();
+      }
+    };
+
+    const onUpdate6 = (e) => {
+      hiddenCount6.value = e.detail.hiddenChildrenCount;
+    };
+
+    // --- Case 7 ---
+    const wrapper7 = ref(null);
+    const hiddenCount7 = ref(0);
+    const rowCount = ref(2);
+    const sortBySize7 = ref(false);
+    const multiItems = ref(Array.from({length: 30}, (_, i) => `Tag ${i+1}`));
+    const onUpdate7 = (e) => hiddenCount7.value = e.detail.hiddenChildrenCount;
+
+    return {
+      vFitChildren, 
+                    
+      wrapper1, chips, addChip, removeChip, onUpdate1, hiddenCount1, useGap,
+      
+      wrapper2, avatars, addAvatar, onUpdate2, hiddenCount2, sortBySize,
+      
+      wrapper3, inputText, onUpdate3, hiddenCount3, forceUpdate, updateKey,
+
+      wrapper4, hiddenCount4, inputVal, keepInput, onUpdate4, inputRef,
+      
+      wrapper5, hiddenCount5, onUpdate5, inlineItems, addInlineItem, removeInlineItem,
+
+      wrapper6, hiddenCount6, onUpdate6, searchTerm, searchInputRef, dropdownOpen,
+      selectedFruits, dropdownOptions, selectFruit, deselectFruit, focusSearch, onSearchBlur, onBackspace,
+
+      wrapper7, hiddenCount7, rowCount, sortBySize7, multiItems, onUpdate7
+    };
+  }
+})
+.directive('fit-children', vFitChildren)
+.mount('#app');
+</script>
+
+</body>
+</html>
