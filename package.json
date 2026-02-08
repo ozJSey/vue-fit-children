@@ -1,0 +1,54 @@
+{
+  "name": "v-fit-children",
+  "version": "1.0.0",
+  "description": "Vue directive that auto-hides children that don't fit within a container's width. Useful for chips, badges, tags, and other inline elements in tight spaces.",
+  "author": "Ozgur Seyidoglu",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AzurIce/v-fit-children.git"
+  },
+  "homepage": "https://github.com/AzurIce/v-fit-children#readme",
+  "bugs": {
+    "url": "https://github.com/AzurIce/v-fit-children/issues"
+  },
+  "type": "module",
+  "main": "dist/vFitChildren.js",
+  "module": "dist/vFitChildren.js",
+  "types": "dist/vFitChildren.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/vFitChildren.js",
+      "types": "./dist/vFitChildren.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "vue",
+    "directive",
+    "overflow",
+    "hide",
+    "children",
+    "fit",
+    "chips",
+    "badges",
+    "tags",
+    "responsive",
+    "truncate",
+    "compact",
+    "vue3"
+  ],
+  "peerDependencies": {
+    "vue": "^3.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "vue": "^3.0.0"
+  }
+}
