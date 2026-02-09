@@ -1,6 +1,6 @@
 # v-fit-children
 
-## Vue directive to hide overflowing children automagically ‼️
+## Auto-hide overflowing children, emit the hidden ones for "+N more" badges
 
 > **Note:** Watch the [usage example video](https://github.com/ozJSey/v-fit-children-resources/blob/main/Screen%20Recording%202026-02-08%20at%2019.09.25.mov) to see the directive in action (temporary link).
 
@@ -29,6 +29,32 @@ npm install v-fit-children
 ```
 
 Vue 3 is a peer dependency — it won't be bundled.
+
+## Register the directive
+
+**Local (per-component) — recommended:**
+
+Import the directive in any `<script setup>` component. Vue auto-registers it because the variable name starts with `v`:
+
+```vue
+<script setup lang="ts">
+import { vFitChildren } from "v-fit-children";
+</script>
+```
+
+**Global (app-wide):**
+
+Register once in your entry file so every component can use `v-fit-children` without importing:
+
+```ts
+import { createApp } from "vue";
+import { vFitChildren } from "v-fit-children";
+import App from "./App.vue";
+
+const app = createApp(App);
+app.directive("fit-children", vFitChildren);
+app.mount("#app");
+```
 
 ## Quick start
 
@@ -257,11 +283,23 @@ Set `offsetNeededInPx: 0` since the badge lives outside the directive element.
 ## Known limitations
 
 - The directive hides children using `display: none !important`. If a child has critical `display` styles set inline, they will be overridden while hidden.
-- `keepVisibleEl` accepts a single element. To pin multiple children, use `data-v-fit-keep` on each. We won't hide them so it may break things
+- `keepVisibleEl` accepts a single element. To pin multiple children, use `data-v-fit-keep` on each. Kept elements are never hidden, so if multiple pinned children exceed the container width, they will overflow.
 
 ## Browser support
 
 Requires browsers that support `ResizeObserver`, `MutationObserver`, and `getBoundingClientRect`. All modern browsers (Chrome, Firefox, Safari, Edge) are supported.
+
+## Changelog
+
+### 1.0.1
+
+- Shortened README subtitle
+- Added directive registration guide (local and global)
+- Fixed incomplete sentence in known limitations
+
+### 1.0.0
+
+- Initial release with all core features: auto-hide, smart fit, gap support, `sortBySize`, `keepVisibleEl`, `data-v-fit-keep`, multi-row (`rowCount`), ResizeObserver/MutationObserver, width caching, and RAF batching
 
 ## License
 
