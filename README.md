@@ -290,6 +290,10 @@ Requires browsers that support `ResizeObserver`, `MutationObserver`, and `getBou
 
 ## Changelog
 
+### 1.3.0
+
+- Added ancestoral recognization, meaning children wrapped in other divs will also be considered for the overflow.
+
 ### 1.2.0
 
 - Removed width caching — all children are measured fresh on every recalculation

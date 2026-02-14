@@ -1,4 +1,6 @@
-import { type Directive, type DirectiveBinding } from "vue";
+import { type Directive, type DirectiveBinding } from 'vue';
+
+
 
 /**
  * A Vue directive that manages visibility of child elements within a container.
@@ -15,9 +17,9 @@ import { type Directive, type DirectiveBinding } from "vue";
  * - Uses queueMicrotask for same-frame, batched recalculation
  * - Measures actual gap from rendered DOM positions (works with web components)
  * - Accounts for content overflow (overflow: visible) via scrollWidth
- * - Supports multi-row layout via `rowCount`
- * - Supports priority pinning via `keepVisibleEl` / `data-v-fit-keep`
- * - Supports hiding largest items first via `sortBySize`
+ * - Supports multi-row layout via rowCount
+ * - Supports priority pinning via keepVisibleEl / data-v-fit-keep
+ * - Supports hiding largest items first via sortBySize
  *
  * Usage:
  * <div v-fit-children="{ widthRestrictingContainer: containerRef, offsetNeededInPx: 50 }">
@@ -36,9 +38,11 @@ interface FitChildrenState {
   offsetNeededInPx: number;
   originalFlexWrap?: string;
   parentContainer?: HTMLElement;
+  parentMutationObserver?: MutationObserver;
   pendingCalc: boolean;
   resizeObserver?: ResizeObserver;
   rowCount: number;
+  siblingResizeObserver?: ResizeObserver;
   sortBySize: boolean;
   targetElement?: HTMLElement;
 }
@@ -110,7 +114,7 @@ const getOuterWidth = (el: HTMLElement): number => {
 
 /**
  * Measure the actual rendered gap between the first two children.
- * This reads real DOM positions instead of trusting CSS `gap`,
+ * This reads real DOM positions instead of trusting CSS gap,
  * which is unreliable with web components, margins, and Shadow DOM.
  * Falls back to CSS gap if children aren't on the same row.
  */
@@ -138,6 +142,30 @@ const measureGap = (
 
   // Fallback: CSS gap value
   return parsePx(elStyle.columnGap || elStyle.gap || "0");
+};
+
+/**
+ * Walk up from el to find its ancestor that is a direct child of container.
+ * Returns el itself if it is already a direct child. Returns undefined if
+ * el is not a descendant of container.
+ */
+const findDirectChildAncestor = (
+  el: HTMLElement,
+  container: HTMLElement,
+): HTMLElement | undefined => {
+  let current: HTMLElement | null = el;
+  while (current && current.parentElement !== container) {
+    current = current.parentElement;
+  }
+  return current ?? undefined;
+};
+
+/** Whether an element participates in normal/flex layout flow. */
+const isInFlow = (el: HTMLElement): boolean => {
+  const style = window.getComputedStyle(el);
+  if (style.display === "none") return false;
+  if (style.position === "absolute" || style.position === "fixed") return false;
+  return true;
 };
 
 /** Whether a child should be kept visible (pinned via attribute or option). */
@@ -194,9 +222,30 @@ const calculateOverflow = (targetElement: HTMLElement | undefined) => {
   let availableSpaceForChildren = getContentWidth(parentContainer);
 
   if (parentContainer !== el) {
-    availableSpaceForChildren -= getHorizontalOverhead(
-      window.getComputedStyle(el),
-    );
+    const elAncestor = findDirectChildAncestor(el, parentContainer);
+
+    if (elAncestor) {
+      // Subtract widths of all siblings within the container (overflow button, action buttons, etc.)
+      const parentStyle = window.getComputedStyle(parentContainer);
+      const parentGap =
+        parsePx(parentStyle.columnGap) || parsePx(parentStyle.gap) || 0;
+
+      for (const sibling of Array.from(parentContainer.children)) {
+        if (sibling !== elAncestor && isInFlow(sibling as HTMLElement)) {
+          availableSpaceForChildren -=
+            getOuterWidth(sibling as HTMLElement) + parentGap;
+        }
+      }
+    }
+
+    // Subtract overhead from el and any wrappers between el and parentContainer
+    let current: HTMLElement | null = el;
+    while (current && current !== parentContainer) {
+      availableSpaceForChildren -= getHorizontalOverhead(
+        window.getComputedStyle(current),
+      );
+      current = current.parentElement;
+    }
   }
 
   const immediateChildren = Array.from(el.children) as HTMLElement[];
@@ -417,9 +466,9 @@ function handleFitChildren(
         scheduleOverflowCalculation(s);
       });
       mutationObserver.observe(state.targetElement, {
+        characterData: true,
         childList: true,
         subtree: true,
-        characterData: true,
       });
       state.mutationObserver = mutationObserver;
     }
@@ -442,6 +491,49 @@ function handleFitChildren(
       );
       resizeObserver.observe(container);
       state.resizeObserver = resizeObserver;
+    }
+
+    // When parentContainer !== el, observe siblings for size changes
+    // so we recalculate when e.g. an overflow button text changes width
+    if (container !== wrapperEl) {
+      // Clean up previous sibling observers
+      state.siblingResizeObserver?.disconnect();
+      state.parentMutationObserver?.disconnect();
+
+      const s = state;
+      const elAncestor = findDirectChildAncestor(wrapperEl, container);
+
+      if (elAncestor) {
+        // Observe existing siblings for resize
+        const siblingObserver = new ResizeObserver(() =>
+          scheduleOverflowCalculation(s),
+        );
+        for (const sibling of Array.from(container.children)) {
+          if (sibling !== elAncestor && isInFlow(sibling as HTMLElement)) {
+            siblingObserver.observe(sibling);
+          }
+        }
+        state.siblingResizeObserver = siblingObserver;
+
+        // Watch parentContainer for sibling additions/removals
+        const parentMutObs = new MutationObserver((mutations) => {
+          for (const m of mutations) {
+            m.addedNodes.forEach((node) => {
+              if (node instanceof Element && node !== elAncestor) {
+                siblingObserver.observe(node);
+              }
+            });
+            m.removedNodes.forEach((node) => {
+              if (node instanceof Element) {
+                siblingObserver.unobserve(node);
+              }
+            });
+          }
+          scheduleOverflowCalculation(s);
+        });
+        parentMutObs.observe(container, { childList: true });
+        state.parentMutationObserver = parentMutObs;
+      }
     }
   }
 
@@ -468,6 +560,14 @@ export const vFitChildren: Directive = {
 
     if (state.childResizeObserver) {
       state.childResizeObserver.disconnect();
+    }
+
+    if (state.siblingResizeObserver) {
+      state.siblingResizeObserver.disconnect();
+    }
+
+    if (state.parentMutationObserver) {
+      state.parentMutationObserver.disconnect();
     }
 
     // Restore hidden children so they're not stuck with display:none
