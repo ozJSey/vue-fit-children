@@ -18,7 +18,6 @@ A Vue 3 directive that automatically hides child elements that don't fit within 
 - Responds to container resizes via `ResizeObserver`
 - Monitors individual child size changes via `ResizeObserver`
 - Detects child additions/removals via `MutationObserver`
-- Caches child widths — only re-measures when children change
 - Batches recalculations with `requestAnimationFrame` for performance
 - Written in TypeScript — ships with full type declarations
 
@@ -273,7 +272,7 @@ Set `offsetNeededInPx: 0` since the badge lives outside the directive element.
 
 1. On mount, the directive observes the `widthRestrictingContainer` for resize and the directive element for child list mutations.
 2. Individual children are also observed for size changes (e.g. an input growing as the user types).
-3. When triggered, it measures child widths via `getBoundingClientRect` (accounting for margins and `gap`). Measurements are cached and only re-computed when children are added, removed, or resized.
+3. When triggered, it measures child widths via `getBoundingClientRect` (accounting for margins and `gap`).
 4. If all children fit without needing the offset, everything stays visible — no "+N" badge is needed.
 5. Otherwise, candidates are sorted by priority (`keepVisibleEl` / `data-v-fit-keep` first), then by size (if `sortBySize`), then by DOM order.
 6. Children are placed row by row (up to `rowCount`). Offset is only reserved on the last row.
@@ -299,7 +298,7 @@ Requires browsers that support `ResizeObserver`, `MutationObserver`, and `getBou
 
 ### 1.0.0
 
-- Initial release with all core features: auto-hide, smart fit, gap support, `sortBySize`, `keepVisibleEl`, `data-v-fit-keep`, multi-row (`rowCount`), ResizeObserver/MutationObserver, width caching, and RAF batching
+- Initial release with all core features: auto-hide, smart fit, gap support, `sortBySize`, `keepVisibleEl`, `data-v-fit-keep`, multi-row (`rowCount`), ResizeObserver/MutationObserver, and RAF batching
 
 ## License
 

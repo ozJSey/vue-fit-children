@@ -27,11 +27,8 @@ import { type Directive, type DirectiveBinding, nextTick } from "vue";
  */
 
 interface FitChildrenState {
-  cachedWidths: number[];
-  cacheValid: boolean;
   childResizeObserver?: ResizeObserver;
   gapFromOption?: number;
-  gapPx: number;
   keepVisibleEl?: HTMLElement;
   mutationObserver?: MutationObserver;
   offsetNeededInPx: number;
@@ -41,7 +38,6 @@ interface FitChildrenState {
   rowCount: number;
   sortBySize: boolean;
   targetElement?: HTMLElement;
-  totalChildWidth: number;
 }
 
 export type FitChildrenEventDetail = {
@@ -119,7 +115,6 @@ const dispatchUpdate = (el: HTMLElement, detail: FitChildrenEventDetail) => {
 };
 
 const showChild = (child: HTMLElement) => {
-  // If explicitly hidden by us, or currently display:none, reveal it.
   if (child.style.display === "none" || child.hasAttribute(HIDDEN_ATTR)) {
     child.style.removeProperty("display");
     child.removeAttribute(HIDDEN_ATTR);
@@ -131,36 +126,6 @@ const hideChild = (child: HTMLElement) => {
     child.style.setProperty("display", "none", "important");
     child.setAttribute(HIDDEN_ATTR, "true");
   }
-};
-
-// ── Measurement ──────────────────────────────────────────────────────
-
-const updateMeasurements = (state: FitChildrenState) => {
-  const { targetElement: el } = state;
-  if (!el) return;
-
-  const children = Array.from(el.children) as HTMLElement[];
-
-  // Temporarily reveal hidden children so measurements are accurate
-  const previouslyHidden = el.querySelectorAll(`[${HIDDEN_ATTR}]`);
-  previouslyHidden.forEach((node) => {
-    const child = node as HTMLElement;
-    child.style.display = "";
-    child.removeAttribute(HIDDEN_ATTR);
-  });
-
-  const style = window.getComputedStyle(el);
-  const computedGap = parsePx(style.columnGap || style.gap || "0");
-  state.gapPx =
-    state.gapFromOption !== undefined ? state.gapFromOption : computedGap;
-
-  state.cachedWidths = children.map(getOuterWidth);
-
-  state.totalChildWidth = state.cachedWidths.reduce((sum, w, i) => {
-    return sum + w + (i > 0 ? state.gapPx : 0);
-  }, 0);
-
-  state.cacheValid = true;
 };
 
 // ── Overflow calculation ─────────────────────────────────────────────
@@ -178,6 +143,7 @@ const calculateOverflow = (targetElement: HTMLElement | undefined) => {
     sortBySize,
     rowCount,
     keepVisibleEl,
+    gapFromOption,
   } = state;
 
   if (!el || !parentContainer) {
@@ -195,15 +161,28 @@ const calculateOverflow = (targetElement: HTMLElement | undefined) => {
 
   const immediateChildren = Array.from(el.children) as HTMLElement[];
 
-  if (
-    !state.cacheValid ||
-    state.cachedWidths.length !== immediateChildren.length
-  ) {
-    updateMeasurements(state);
-  }
+  // Temporarily reveal hidden children so measurements are accurate
+  const previouslyHidden = el.querySelectorAll(`[${HIDDEN_ATTR}]`);
+  previouslyHidden.forEach((node) => {
+    const child = node as HTMLElement;
+    child.style.display = "";
+    child.removeAttribute(HIDDEN_ATTR);
+  });
+
+  // Measure gap
+  const elStyle = window.getComputedStyle(el);
+  const computedGap = parsePx(elStyle.columnGap || elStyle.gap || "0");
+  const gapPx = gapFromOption !== undefined ? gapFromOption : computedGap;
+
+  // Measure all children
+  const childWidths = immediateChildren.map(getOuterWidth);
+
+  const totalChildWidth = childWidths.reduce((sum: number, w: number, i: number) => {
+    return sum + w + (i > 0 ? gapPx : 0);
+  }, 0);
 
   // If all children fit without offset, show everything (no "+N" badge needed)
-  if (state.totalChildWidth <= availableSpaceForChildren) {
+  if (totalChildWidth <= availableSpaceForChildren) {
     immediateChildren.forEach(showChild);
     dispatchUpdate(el, {
       hiddenChildren: [],
@@ -223,7 +202,7 @@ const calculateOverflow = (targetElement: HTMLElement | undefined) => {
     if (!aKeep && bKeep) return 1;
 
     if (sortBySize) {
-      return state.cachedWidths[a] - state.cachedWidths[b];
+      return childWidths[a] - childWidths[b];
     }
     return a - b;
   });
@@ -236,10 +215,10 @@ const calculateOverflow = (targetElement: HTMLElement | undefined) => {
   let currentLine = 1;
 
   for (const index of candidates) {
-    const itemWidth = state.cachedWidths[index];
+    const itemWidth = childWidths[index];
     const child = immediateChildren[index];
 
-    let gap = usedWidth === 0 ? 0 : state.gapPx;
+    let gap = usedWidth === 0 ? 0 : gapPx;
     let limit =
       currentLine === rowCount
         ? strictWidthLastRow
@@ -291,12 +270,7 @@ const calculateOverflow = (targetElement: HTMLElement | undefined) => {
 
 // ── Scheduling ───────────────────────────────────────────────────────
 
-const scheduleOverflowCalculation = (
-  state: FitChildrenState,
-  invalidateCache = false,
-) => {
-  if (invalidateCache) state.cacheValid = false;
-
+const scheduleOverflowCalculation = (state: FitChildrenState) => {
   if (state.rafId || !state.targetElement) return;
 
   state.rafId = requestAnimationFrame(() => {
@@ -304,26 +278,6 @@ const scheduleOverflowCalculation = (
       calculateOverflow(state.targetElement);
     });
   });
-};
-
-const handleChildResize = (
-  entries: ResizeObserverEntry[],
-  state: FitChildrenState,
-) => {
-  if (!state.cacheValid || !state.targetElement) return;
-
-  const children = Array.from(state.targetElement.children);
-
-  const needsRecalc = entries.some((entry) => {
-    const index = children.indexOf(entry.target);
-    if (index === -1) return false;
-    const currentOuterWidth = getOuterWidth(entry.target as HTMLElement);
-    return Math.abs(currentOuterWidth - (state.cachedWidths[index] || 0)) > 1;
-  });
-
-  if (needsRecalc) {
-    scheduleOverflowCalculation(state, true);
-  }
 };
 
 // ── Directive lifecycle ──────────────────────────────────────────────
@@ -336,11 +290,8 @@ function handleFitChildren(
 
   if (!state) {
     state = {
-      cachedWidths: [],
-      cacheValid: false,
       childResizeObserver: undefined,
       gapFromOption: binding.value?.gap,
-      gapPx: 0,
       keepVisibleEl: binding.value?.keepVisibleEl,
       mutationObserver: undefined,
       offsetNeededInPx: Math.max(
@@ -353,7 +304,6 @@ function handleFitChildren(
       rowCount: binding.value?.rowCount ?? 1,
       sortBySize: binding.value?.sortBySize ?? false,
       targetElement: undefined,
-      totalChildWidth: 0,
     };
     stateMap.set(wrapperEl, state);
   } else {
@@ -389,7 +339,7 @@ function handleFitChildren(
     }
 
     if (needsUpdate) {
-      scheduleOverflowCalculation(state, false);
+      scheduleOverflowCalculation(state);
     }
   }
 
@@ -397,8 +347,9 @@ function handleFitChildren(
     state.targetElement = wrapperEl;
 
     if (!state.childResizeObserver) {
-      const childResizeObserver = new ResizeObserver((entries) =>
-        handleChildResize(entries, state!), // Safe because we just set stateMap
+      const s = state;
+      const childResizeObserver = new ResizeObserver(() =>
+        scheduleOverflowCalculation(s),
       );
 
       Array.from(state.targetElement.children).forEach((child) =>
@@ -408,22 +359,22 @@ function handleFitChildren(
     }
 
     if (!state.mutationObserver) {
+      const s = state;
       const mutationObserver = new MutationObserver((mutations) => {
-        if (!state) return;
         mutations.forEach((m) => {
           m.addedNodes.forEach((node) => {
             if (node instanceof Element) {
-              state.childResizeObserver?.observe(node);
+              s.childResizeObserver?.observe(node);
             }
           });
 
           m.removedNodes.forEach((node) => {
             if (node instanceof Element) {
-              state.childResizeObserver?.unobserve(node);
+              s.childResizeObserver?.unobserve(node);
             }
           });
         });
-        scheduleOverflowCalculation(state, true);
+        scheduleOverflowCalculation(s);
       });
       mutationObserver.observe(state.targetElement, { childList: true });
       state.mutationObserver = mutationObserver;
@@ -441,8 +392,9 @@ function handleFitChildren(
     state.parentContainer = container;
 
     if (!state.resizeObserver) {
+      const s = state;
       const resizeObserver = new ResizeObserver(() =>
-        scheduleOverflowCalculation(state!),
+        scheduleOverflowCalculation(s),
       );
       resizeObserver.observe(container);
       state.resizeObserver = resizeObserver;

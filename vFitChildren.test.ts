@@ -149,11 +149,6 @@ async function triggerResize() {
   await flush();
 }
 
-async function triggerMutation() {
-  MockMutationObserver.instances.forEach((i) => i.trigger());
-  await flush();
-}
-
 // --- Tests ---
 
 describe("vFitChildren", () => {
@@ -306,7 +301,7 @@ describe("vFitChildren", () => {
     expect(children[2].style.display).not.toBe("none");
   });
 
-  it("does not re-measure widths on resize (uses cache)", async () => {
+  it("re-measures all children on every recalculation", async () => {
     const container = createContainer(200);
     const wrapper = createWrapper([80, 80, 80]);
 
@@ -316,7 +311,7 @@ describe("vFitChildren", () => {
     });
     await triggerResize();
 
-    // Replace getBoundingClientRect with tracked getters because directive uses getOuterWidth
+    // Track measurements after initial calc
     let measureCount = 0;
     const children = Array.from(wrapper.children) as HTMLElement[];
     children.forEach((child) => {
@@ -327,40 +322,9 @@ describe("vFitChildren", () => {
       });
     });
 
-    // Trigger resize — should use cache, not re-measure
+    // Trigger resize — should always re-measure
     setClientWidth(container, 300);
     await triggerResize();
-
-    expect(measureCount).toBe(0);
-  });
-
-  it("re-measures widths on mutation (cache invalidated)", async () => {
-    const container = createContainer(300);
-    const wrapper = createWrapper([80, 80]);
-
-    mountDirective(wrapper, {
-      offsetNeededInPx: 50,
-      widthRestrictingContainer: container,
-    });
-    await triggerResize(); // initial
-
-    // Add a new child
-    const newChild = document.createElement("span");
-    setClientWidth(newChild, 80);
-    wrapper.appendChild(newChild);
-
-    // Track measurements on all children
-    let measureCount = 0;
-    Array.from(wrapper.children).forEach((child) => {
-      const original = child.getBoundingClientRect;
-      child.getBoundingClientRect = () => {
-        measureCount++;
-        return original.call(child);
-      };
-    });
-
-    // Trigger mutation — should invalidate cache and re-measure
-    await triggerMutation();
 
     expect(measureCount).toBeGreaterThan(0);
   });
