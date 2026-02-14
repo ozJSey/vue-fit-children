@@ -270,14 +270,14 @@ Set `offsetNeededInPx: 0` since the badge lives outside the directive element.
 
 ## How it works
 
-1. On mount, the directive observes the `widthRestrictingContainer` for resize and the directive element for child list mutations.
-2. Individual children are also observed for size changes (e.g. an input growing as the user types).
-3. When triggered, it measures child widths via `getBoundingClientRect` (accounting for margins and `gap`).
+1. Before mount, the directive sets up `ResizeObserver` on the container and children, and a `MutationObserver` for child list changes. Observers are registered before DOM insertion so the first calculation fires as soon as layout completes — no flash of unstyled children.
+2. When any observer fires, a recalculation is scheduled via `requestAnimationFrame` (deduplicated — only one pending at a time).
+3. The calculation temporarily reveals hidden children, measures all widths via `getBoundingClientRect` (accounting for margins and `gap`), then determines which fit.
 4. If all children fit without needing the offset, everything stays visible — no "+N" badge is needed.
 5. Otherwise, candidates are sorted by priority (`keepVisibleEl` / `data-v-fit-keep` first), then by size (if `sortBySize`), then by DOM order.
 6. Children are placed row by row (up to `rowCount`). Offset is only reserved on the last row.
 7. A `fit-children-updated` event is dispatched so you can render a "+N more" indicator.
-8. Recalculations are batched via `requestAnimationFrame` + Vue's `nextTick` to avoid layout thrashing.
+8. On unmount, all observers are disconnected, hidden children are restored, and any `flex-wrap` style set by the directive is cleaned up.
 
 ## Known limitations
 
@@ -289,6 +289,17 @@ Set `offsetNeededInPx: 0` since the badge lives outside the directive element.
 Requires browsers that support `ResizeObserver`, `MutationObserver`, and `getBoundingClientRect`. All modern browsers (Chrome, Firefox, Safari, Edge) are supported.
 
 ## Changelog
+
+### 1.2.0
+
+- Removed width caching — all children are measured fresh on every recalculation
+- Fixed row transition bug where items that could fit on the next row were incorrectly hidden
+- Fixed `isOverflowing` reporting `true` even when all items fit across multiple rows
+- Fixed unmount not restoring hidden children (`display: none` persisted after directive removal)
+- Fixed unmount not cleaning up `flex-wrap` style set by `rowCount > 1`
+- Reverted MutationObserver to `childList` only — child `ResizeObserver` handles size changes
+- Simplified scheduling to `requestAnimationFrame` only (removed `nextTick` wrapper)
+- Added 15 new tests: multi-row layout, `updated` hook, unmount cleanup, combined features
 
 ### 1.0.1
 

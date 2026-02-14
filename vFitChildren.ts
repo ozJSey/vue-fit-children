@@ -1,4 +1,4 @@
-import { type Directive, type DirectiveBinding, nextTick } from "vue";
+import { type Directive, type DirectiveBinding } from "vue";
 
 /**
  * A Vue directive that manages visibility of child elements within a container.
@@ -11,8 +11,10 @@ import { type Directive, type DirectiveBinding, nextTick } from "vue";
  * Features:
  * - Monitors the container's width via ResizeObserver
  * - Monitors individual child sizes via ResizeObserver
- * - Detects child additions/removals via MutationObserver
- * - Uses requestAnimationFrame for batched, performant recalculation
+ * - Detects child additions/removals and content changes via MutationObserver
+ * - Uses queueMicrotask for same-frame, batched recalculation
+ * - Measures actual gap from rendered DOM positions (works with web components)
+ * - Accounts for content overflow (overflow: visible) via scrollWidth
  * - Supports multi-row layout via `rowCount`
  * - Supports priority pinning via `keepVisibleEl` / `data-v-fit-keep`
  * - Supports hiding largest items first via `sortBySize`
@@ -32,8 +34,9 @@ interface FitChildrenState {
   keepVisibleEl?: HTMLElement;
   mutationObserver?: MutationObserver;
   offsetNeededInPx: number;
+  originalFlexWrap?: string;
   parentContainer?: HTMLElement;
-  rafId: number | null;
+  pendingCalc: boolean;
   resizeObserver?: ResizeObserver;
   rowCount: number;
   sortBySize: boolean;
@@ -87,14 +90,54 @@ const getContentWidth = (
   parsePx(style.paddingLeft) -
   parsePx(style.paddingRight);
 
-/** Outer width of an element (bounding rect width + horizontal margins). */
+/**
+ * Outer width of an element including content overflow.
+ * Uses Math.max(borderBoxWidth, scrollWidth + borders) so elements with
+ * overflow: visible report their actual needed width, not just their box.
+ */
 const getOuterWidth = (el: HTMLElement): number => {
   const style = window.getComputedStyle(el);
+  const borderBoxWidth = el.getBoundingClientRect().width;
+  const borders =
+    parsePx(style.borderLeftWidth) + parsePx(style.borderRightWidth);
+  const neededWidth = el.scrollWidth + borders;
   return (
-    el.getBoundingClientRect().width +
+    Math.max(borderBoxWidth, neededWidth) +
     parsePx(style.marginLeft) +
     parsePx(style.marginRight)
   );
+};
+
+/**
+ * Measure the actual rendered gap between the first two children.
+ * This reads real DOM positions instead of trusting CSS `gap`,
+ * which is unreliable with web components, margins, and Shadow DOM.
+ * Falls back to CSS gap if children aren't on the same row.
+ */
+const measureGap = (
+  children: HTMLElement[],
+  elStyle: CSSStyleDeclaration,
+  gapFromOption?: number,
+): number => {
+  if (gapFromOption !== undefined) return gapFromOption;
+  if (children.length < 2) return 0;
+
+  const rect0 = children[0].getBoundingClientRect();
+  const rect1 = children[1].getBoundingClientRect();
+
+  // Only trust DOM measurement if both children are on the same row
+  const sameRow = Math.abs(rect0.top - rect1.top) < rect0.height * 0.5;
+  if (sameRow && rect1.left > rect0.right) {
+    const style0 = window.getComputedStyle(children[0]);
+    const style1 = window.getComputedStyle(children[1]);
+    // Gap = space between margin boxes
+    const marginBoxRight0 = rect0.right + parsePx(style0.marginRight);
+    const marginBoxLeft1 = rect1.left - parsePx(style1.marginLeft);
+    return Math.max(0, marginBoxLeft1 - marginBoxRight0);
+  }
+
+  // Fallback: CSS gap value
+  return parsePx(elStyle.columnGap || elStyle.gap || "0");
 };
 
 /** Whether a child should be kept visible (pinned via attribute or option). */
@@ -146,10 +189,7 @@ const calculateOverflow = (targetElement: HTMLElement | undefined) => {
     gapFromOption,
   } = state;
 
-  if (!el || !parentContainer) {
-    state.rafId = null;
-    return;
-  }
+  if (!el || !parentContainer) return;
 
   let availableSpaceForChildren = getContentWidth(parentContainer);
 
@@ -169,17 +209,19 @@ const calculateOverflow = (targetElement: HTMLElement | undefined) => {
     child.removeAttribute(HIDDEN_ATTR);
   });
 
-  // Measure gap
+  // Measure gap from actual DOM positions, not CSS
   const elStyle = window.getComputedStyle(el);
-  const computedGap = parsePx(elStyle.columnGap || elStyle.gap || "0");
-  const gapPx = gapFromOption !== undefined ? gapFromOption : computedGap;
+  const gapPx = measureGap(immediateChildren, elStyle, gapFromOption);
 
-  // Measure all children
+  // Measure all children (accounts for overflow: visible via scrollWidth)
   const childWidths = immediateChildren.map(getOuterWidth);
 
-  const totalChildWidth = childWidths.reduce((sum: number, w: number, i: number) => {
-    return sum + w + (i > 0 ? gapPx : 0);
-  }, 0);
+  const totalChildWidth = childWidths.reduce(
+    (sum: number, w: number, i: number) => {
+      return sum + w + (i > 0 ? gapPx : 0);
+    },
+    0,
+  );
 
   // If all children fit without offset, show everything (no "+N" badge needed)
   if (totalChildWidth <= availableSpaceForChildren) {
@@ -189,7 +231,6 @@ const calculateOverflow = (targetElement: HTMLElement | undefined) => {
       hiddenChildrenCount: 0,
       isOverflowing: false,
     });
-    state.rafId = null;
     return;
   }
 
@@ -224,17 +265,15 @@ const calculateOverflow = (targetElement: HTMLElement | undefined) => {
         ? strictWidthLastRow
         : availableSpaceForChildren;
 
-    // If it doesn't fit current line, try next line
-    if (usedWidth + gap + itemWidth > limit) {
-      if (currentLine < rowCount) {
-        currentLine++;
-        usedWidth = 0;
-        gap = 0;
-        limit =
-          currentLine === rowCount
-            ? strictWidthLastRow
-            : availableSpaceForChildren;
-      }
+    // If it doesn't fit current line, try advancing to the next line
+    if (usedWidth + gap + itemWidth > limit && currentLine < rowCount) {
+      currentLine++;
+      usedWidth = 0;
+      gap = 0;
+      limit =
+        currentLine === rowCount
+          ? strictWidthLastRow
+          : availableSpaceForChildren;
     }
 
     if (usedWidth + gap + itemWidth <= limit) {
@@ -260,23 +299,24 @@ const calculateOverflow = (targetElement: HTMLElement | undefined) => {
     }
   });
 
+  const isOverflowing = hiddenChildren.length > 0;
+
   dispatchUpdate(el, {
     hiddenChildren,
     hiddenChildrenCount: hiddenChildren.length,
-    isOverflowing: true,
+    isOverflowing,
   });
-  state.rafId = null;
 };
 
 // ── Scheduling ───────────────────────────────────────────────────────
 
 const scheduleOverflowCalculation = (state: FitChildrenState) => {
-  if (state.rafId || !state.targetElement) return;
+  if (state.pendingCalc || !state.targetElement) return;
 
-  state.rafId = requestAnimationFrame(() => {
-    nextTick(() => {
-      calculateOverflow(state.targetElement);
-    });
+  state.pendingCalc = true;
+  queueMicrotask(() => {
+    state.pendingCalc = false;
+    calculateOverflow(state.targetElement);
   });
 };
 
@@ -299,7 +339,7 @@ function handleFitChildren(
         0,
       ),
       parentContainer: undefined,
-      rafId: null,
+      pendingCalc: false,
       resizeObserver: undefined,
       rowCount: binding.value?.rowCount ?? 1,
       sortBySize: binding.value?.sortBySize ?? false,
@@ -407,6 +447,7 @@ function handleFitChildren(
 
   // Ensure flex-wrap is enabled if multiple rows are allowed
   if (state.rowCount > 1 && wrapperEl.style.flexWrap !== "wrap") {
+    state.originalFlexWrap = wrapperEl.style.flexWrap;
     wrapperEl.style.setProperty("flex-wrap", "wrap");
   }
 }
@@ -416,10 +457,6 @@ export const vFitChildren: Directive = {
   beforeUnmount(el: HTMLElement) {
     const state = stateMap.get(el);
     if (!state) return;
-
-    if (state.rafId) {
-      cancelAnimationFrame(state.rafId);
-    }
 
     if (state.mutationObserver) {
       state.mutationObserver.disconnect();
@@ -431,6 +468,19 @@ export const vFitChildren: Directive = {
 
     if (state.childResizeObserver) {
       state.childResizeObserver.disconnect();
+    }
+
+    // Restore hidden children so they're not stuck with display:none
+    const hiddenChildren = el.querySelectorAll(`[${HIDDEN_ATTR}]`);
+    hiddenChildren.forEach((node) => showChild(node as HTMLElement));
+
+    // Restore original flex-wrap if we set it
+    if (state.originalFlexWrap !== undefined) {
+      if (state.originalFlexWrap) {
+        el.style.setProperty("flex-wrap", state.originalFlexWrap);
+      } else {
+        el.style.removeProperty("flex-wrap");
+      }
     }
 
     stateMap.delete(el);

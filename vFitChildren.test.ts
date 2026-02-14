@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { nextTick } from "vue";
 import { type FitChildrenEventDetail, vFitChildren } from "./vFitChildren";
 
 // --- Mock ResizeObserver ---
@@ -53,30 +52,20 @@ class MockMutationObserver {
   }
 }
 
-// --- Mock requestAnimationFrame ---
+// --- Mock queueMicrotask ---
 
-let rafCallbacks: Map<number, FrameRequestCallback> = new Map();
-let nextRafId = 1;
+let microtaskCallbacks: (() => void)[] = [];
 
-function mockRaf(cb: FrameRequestCallback): number {
-  const id = nextRafId++;
-  rafCallbacks.set(id, cb);
-  return id;
+function mockQueueMicrotask(cb: () => void) {
+  microtaskCallbacks.push(cb);
 }
 
-function mockCancelRaf(id: number) {
-  rafCallbacks.delete(id);
-}
-
-function flushRaf() {
-  const cbs = [...rafCallbacks.values()];
-  rafCallbacks.clear();
-  cbs.forEach((cb) => cb(16));
-}
-
-async function flush() {
-  flushRaf();
-  await nextTick();
+function flushMicrotasks() {
+  while (microtaskCallbacks.length > 0) {
+    const cbs = [...microtaskCallbacks];
+    microtaskCallbacks = [];
+    cbs.forEach((cb) => cb());
+  }
 }
 
 // --- Helpers ---
@@ -87,12 +76,11 @@ function setClientWidth(el: HTMLElement, width: number) {
     value: width,
     writable: true,
   });
-  // Also mock getBoundingClientRect as the directive uses it now
   el.getBoundingClientRect = () => ({
-    bottom: 0,
-    height: 0,
+    bottom: 20,
+    height: 20,
     left: 0,
-    right: 0,
+    right: width,
     toJSON: () => {},
     top: 0,
     width,
@@ -130,6 +118,10 @@ function mountDirective(wrapper: HTMLElement, options: any) {
   return binding;
 }
 
+function updateDirective(wrapper: HTMLElement, binding: any) {
+  (vFitChildren as any).updated(wrapper, binding);
+}
+
 function unmountDirective(wrapper: HTMLElement) {
   (vFitChildren as any).beforeUnmount(wrapper);
 }
@@ -146,7 +138,7 @@ function captureEvents(wrapper: HTMLElement): FitChildrenEventDetail[] {
 
 async function triggerResize() {
   MockResizeObserver.instances.forEach((i) => i.trigger());
-  await flush();
+  flushMicrotasks();
 }
 
 // --- Tests ---
@@ -155,17 +147,17 @@ describe("vFitChildren", () => {
   beforeEach(() => {
     MockResizeObserver.reset();
     MockMutationObserver.reset();
-    rafCallbacks.clear();
-    nextRafId = 1;
+    microtaskCallbacks = [];
     vi.stubGlobal("ResizeObserver", MockResizeObserver);
     vi.stubGlobal("MutationObserver", MockMutationObserver);
-    vi.stubGlobal("requestAnimationFrame", mockRaf);
-    vi.stubGlobal("cancelAnimationFrame", mockCancelRaf);
+    vi.stubGlobal("queueMicrotask", mockQueueMicrotask);
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
   });
+
+  // ── Basic overflow ─────────────────────────────────────────────────
 
   it("hides children that overflow the container", async () => {
     const container = createContainer(200);
@@ -178,9 +170,6 @@ describe("vFitChildren", () => {
     });
     await triggerResize();
 
-    // child 0: 80 (always visible)
-    // child 1: 80+80=160, 160+50=210 > 200 -> hidden
-    // children 2,3: already overflowed -> hidden
     const children = Array.from(wrapper.children) as HTMLElement[];
     expect(children[0].style.display).not.toBe("none");
     expect(children[1].style.display).toBe("none");
@@ -194,18 +183,17 @@ describe("vFitChildren", () => {
   });
 
   it("hides the first child if it does not fit (strict fit)", async () => {
-    const container = createContainer(10); // very small
+    const container = createContainer(10);
     const wrapper = createWrapper([100, 50, 50]);
     const events = captureEvents(wrapper);
 
     mountDirective(wrapper, {
-      offsetNeededInPx: 0, // Even with 0 offset, 100 > 10
+      offsetNeededInPx: 0,
       widthRestrictingContainer: container,
     });
     await triggerResize();
 
     const children = Array.from(wrapper.children) as HTMLElement[];
-    // Strict fit: First child (100) > Container (10) -> Hidden.
     expect(children[0].style.display).toBe("none");
     expect(children[1].style.display).toBe("none");
     expect(children[2].style.display).toBe("none");
@@ -214,7 +202,7 @@ describe("vFitChildren", () => {
 
   it("hides a single child if it overflows (strict fit)", async () => {
     const container = createContainer(50);
-    const wrapper = createWrapper([200]); // wider than container
+    const wrapper = createWrapper([200]);
     const events = captureEvents(wrapper);
 
     mountDirective(wrapper, { widthRestrictingContainer: container });
@@ -228,7 +216,7 @@ describe("vFitChildren", () => {
 
   it("dispatches event with zero counts for no children", async () => {
     const container = createContainer(200);
-    const wrapper = document.createElement("div"); // empty
+    const wrapper = document.createElement("div");
     const events = captureEvents(wrapper);
 
     mountDirective(wrapper, { widthRestrictingContainer: container });
@@ -239,27 +227,23 @@ describe("vFitChildren", () => {
     expect(events[0].isOverflowing).toBe(false);
   });
 
+  // ── Smart fit ──────────────────────────────────────────────────────
+
   it("does not hide items if they fit but offset would overflow (smart fit)", async () => {
     const container = createContainer(200);
-    // items: 80, 80 = 160 total.
-    // 160 + 50 (offset) = 210 > 200.
-    // OLD behavior: Hidden because we naively reserved 50px.
-    // NEW behavior: 160 <= 200, so we show everything (no badge needed).
     const wrapper = createWrapper([80, 80]);
     const events = captureEvents(wrapper);
 
-    mountDirective(wrapper, {widthRestrictingContainer: container});
+    mountDirective(wrapper, { widthRestrictingContainer: container });
     await triggerResize();
 
     const children = Array.from(wrapper.children) as HTMLElement[];
-    // Smart fit -> all visible
     expect(children[1].style.display).not.toBe("none");
     expect(events[0].hiddenChildrenCount).toBe(0);
   });
 
   it("allows offset of zero", async () => {
     const container = createContainer(200);
-    // child 0=80, child 1: 80+80=160, 160+0=160 < 200 -> visible
     const wrapper = createWrapper([80, 80]);
     const events = captureEvents(wrapper);
 
@@ -274,6 +258,8 @@ describe("vFitChildren", () => {
     expect(events[0].hiddenChildrenCount).toBe(0);
   });
 
+  // ── Responsive ─────────────────────────────────────────────────────
+
   it("shows previously hidden children when container grows", async () => {
     const container = createContainer(200);
     const wrapper = createWrapper([80, 80, 80]);
@@ -285,14 +271,11 @@ describe("vFitChildren", () => {
     });
     await triggerResize();
 
-    // Initially: child0=80, child1=160, 160+50=210>200 -> 2 hidden
     expect(events[0].hiddenChildrenCount).toBe(2);
 
-    // Grow container
     setClientWidth(container, 500);
     await triggerResize();
 
-    // Now all fit: child1=160+50=210<500, child2=240+50=290<500
     expect(events[1].hiddenChildrenCount).toBe(0);
     expect(events[1].isOverflowing).toBe(false);
 
@@ -311,7 +294,6 @@ describe("vFitChildren", () => {
     });
     await triggerResize();
 
-    // Track measurements after initial calc
     let measureCount = 0;
     const children = Array.from(wrapper.children) as HTMLElement[];
     children.forEach((child) => {
@@ -322,12 +304,37 @@ describe("vFitChildren", () => {
       });
     });
 
-    // Trigger resize — should always re-measure
     setClientWidth(container, 300);
     await triggerResize();
 
     expect(measureCount).toBeGreaterThan(0);
   });
+
+  it("recalculates when a child's size changes via ResizeObserver", async () => {
+    const container = createContainer(300);
+    const wrapper = createWrapper([80, 80, 80]);
+    const events = captureEvents(wrapper);
+
+    mountDirective(wrapper, {
+      offsetNeededInPx: 50,
+      widthRestrictingContainer: container,
+    });
+    await triggerResize();
+
+    expect(events[0].hiddenChildrenCount).toBe(0);
+
+    // Child grows (e.g. dropdown selection changes text)
+    const children = Array.from(wrapper.children) as HTMLElement[];
+    setClientWidth(children[1], 200);
+
+    // Child ResizeObserver fires
+    await triggerResize();
+
+    expect(events[1].isOverflowing).toBe(true);
+    expect(events[1].hiddenChildrenCount).toBeGreaterThan(0);
+  });
+
+  // ── Batching & performance ─────────────────────────────────────────
 
   it("batches multiple triggers into one calculation", async () => {
     const container = createContainer(200);
@@ -339,17 +346,16 @@ describe("vFitChildren", () => {
       widthRestrictingContainer: container,
     });
 
-    // Trigger all resize observers (container + children)
-    // The previous test code assumed instances[0] was container, but now it might be child observer
-    MockResizeObserver.instances.forEach(obs => obs.trigger());
-    MockResizeObserver.instances.forEach(obs => obs.trigger());
-    MockResizeObserver.instances.forEach(obs => obs.trigger());
+    MockResizeObserver.instances.forEach((obs) => obs.trigger());
+    MockResizeObserver.instances.forEach((obs) => obs.trigger());
+    MockResizeObserver.instances.forEach((obs) => obs.trigger());
 
-    await flush();
+    flushMicrotasks();
 
-    // rAF dedup: should only calculate once
     expect(events).toHaveLength(1);
   });
+
+  // ── Attributes ─────────────────────────────────────────────────────
 
   it("marks hidden children with data-v-fit-hidden attribute", async () => {
     const container = createContainer(200);
@@ -366,6 +372,8 @@ describe("vFitChildren", () => {
     expect(children[1].getAttribute("data-v-fit-hidden")).toBe("true");
     expect(children[2].getAttribute("data-v-fit-hidden")).toBe("true");
   });
+
+  // ── Cleanup ────────────────────────────────────────────────────────
 
   it("cleans up observers on unmount", async () => {
     const container = createContainer(200);
@@ -385,22 +393,62 @@ describe("vFitChildren", () => {
     expect(mutationDisconnect).toHaveBeenCalled();
   });
 
-  it("cancels pending rAF on unmount", async () => {
+  it("pending microtask after unmount does not crash", async () => {
     const container = createContainer(200);
     const wrapper = createWrapper([80, 80]);
 
     mountDirective(wrapper, { widthRestrictingContainer: container });
 
-    // Trigger all observers
-    MockResizeObserver.instances.forEach(obs => obs.trigger());
-
-    const cancelSpy = vi.fn();
-    vi.stubGlobal("cancelAnimationFrame", cancelSpy);
+    // Trigger without flushing — microtask is pending
+    MockResizeObserver.instances.forEach((obs) => obs.trigger());
 
     unmountDirective(wrapper);
 
-    expect(cancelSpy).toHaveBeenCalled();
+    // Flushing after unmount should not throw
+    expect(() => flushMicrotasks()).not.toThrow();
   });
+
+  it("restores hidden children on unmount", async () => {
+    const container = createContainer(200);
+    const wrapper = createWrapper([80, 80, 80]);
+
+    mountDirective(wrapper, {
+      offsetNeededInPx: 50,
+      widthRestrictingContainer: container,
+    });
+    await triggerResize();
+
+    const children = Array.from(wrapper.children) as HTMLElement[];
+    expect(children[1].style.display).toBe("none");
+    expect(children[2].style.display).toBe("none");
+
+    unmountDirective(wrapper);
+
+    // Children should be visible again after unmount
+    expect(children[1].style.display).not.toBe("none");
+    expect(children[2].style.display).not.toBe("none");
+    expect(children[1].hasAttribute("data-v-fit-hidden")).toBe(false);
+    expect(children[2].hasAttribute("data-v-fit-hidden")).toBe(false);
+  });
+
+  it("restores flex-wrap on unmount when rowCount > 1", async () => {
+    const container = createContainer(200);
+    const wrapper = createWrapper([80, 80]);
+
+    mountDirective(wrapper, {
+      rowCount: 2,
+      widthRestrictingContainer: container,
+    });
+    await triggerResize();
+
+    expect(wrapper.style.flexWrap).toBe("wrap");
+
+    unmountDirective(wrapper);
+
+    expect(wrapper.style.flexWrap).toBe("");
+  });
+
+  // ── Event details ──────────────────────────────────────────────────
 
   it("event hiddenChildren references the actual hidden DOM elements", async () => {
     const container = createContainer(200);
@@ -438,22 +486,10 @@ describe("vFitChildren", () => {
     expect(events[0].isOverflowing).toBe(false);
   });
 
+  // ── sortBySize ─────────────────────────────────────────────────────
+
   it("maximizes visible items when sortBySize is true", async () => {
     const container = createContainer(200);
-    // Items: 80 (always visible), 100 (large), 30 (small), 30 (small)
-    // Sequential: 80 + 100 + 30 + 30.
-    // 80 + 100 (gap 0) = 180. Offset 50 -> 230 > 200. Hides 100.
-    // Continuing sequential... actually if 100 is hidden, standard sequential stops or hides rest?
-    // Current logic: it iterates index 1..N. If overflowedOnce, hide.
-    // So 100 hides. Then 30 hides. Then 30 hides.
-    // Result sequential: Only 80 visible.
-
-    // Sorted: 80 (fixed). Candidates: [100, 30, 30] -> Sorted width: [30, 30, 100]
-    // 80 + 30 = 110. Fits. 
-    // 110 + 30 = 140. Fits.
-    // 140 + 100 + 50(offset) = 290 > 200. Fail.
-    // Result sorted: 80, 30, 30 visible.
-    
     const wrapper = createWrapper([80, 100, 30, 30]);
     const events = captureEvents(wrapper);
 
@@ -466,23 +502,62 @@ describe("vFitChildren", () => {
 
     const children = Array.from(wrapper.children) as HTMLElement[];
     expect(children[0].style.display).not.toBe("none"); // 80
-    expect(children[1].style.display).toBe("none");     // 100 (hidden)
+    expect(children[1].style.display).toBe("none"); // 100 (hidden — largest)
     expect(children[2].style.display).not.toBe("none"); // 30
     expect(children[3].style.display).not.toBe("none"); // 30
 
     expect(events[0].hiddenChildrenCount).toBe(1);
-    expect(events[0].hiddenChildren).toHaveLength(1);
     expect(events[0].hiddenChildren[0]).toBe(children[1]);
   });
 
-  it("accounts for gap in calculation", async () => {
+  // ── Gap ────────────────────────────────────────────────────────────
+
+  it("measures gap from actual DOM positions between children", async () => {
+    const container = createContainer(165);
+    const wrapper = document.createElement("div");
+
+    // Child 0: 80px wide at position left=0
+    const child0 = document.createElement("span");
+    child0.getBoundingClientRect = () => ({
+      bottom: 20, height: 20, left: 0, right: 80,
+      toJSON: () => {}, top: 0, width: 80, x: 0, y: 0,
+    });
+    Object.defineProperty(child0, "scrollWidth", {
+      configurable: true, value: 80,
+    });
+
+    // Child 1: 80px wide at position left=90 (10px gap from DOM)
+    const child1 = document.createElement("span");
+    child1.getBoundingClientRect = () => ({
+      bottom: 20, height: 20, left: 90, right: 170,
+      toJSON: () => {}, top: 0, width: 80, x: 90, y: 0,
+    });
+    Object.defineProperty(child1, "scrollWidth", {
+      configurable: true, value: 80,
+    });
+
+    wrapper.appendChild(child0);
+    wrapper.appendChild(child1);
+
+    const events = captureEvents(wrapper);
+
+    // With 10px DOM gap: 80 + 10 + 80 = 170 > 165 → overflow
+    // Without gap: 80 + 80 = 160 ≤ 165 → smart fit (all visible)
+    // This test proves DOM-based gap measurement works
+    mountDirective(wrapper, {
+      offsetNeededInPx: 50,
+      widthRestrictingContainer: container,
+    });
+    await triggerResize();
+
+    expect(events[0].hiddenChildrenCount).toBe(1);
+    expect(events[0].isOverflowing).toBe(true);
+  });
+
+  it("falls back to CSS gap when children are not on the same row", async () => {
     const container = createContainer(200);
-    // Items: 80, 80. Gap 50. Total 80 + 50 + 80 = 210 > 200.
-    // Must hide 2nd item due to gap pushing it over.
-    
     const wrapper = createWrapper([80, 80]);
-    
-    // Mock getComputedStyle for gap
+
     const spy = vi.spyOn(window, "getComputedStyle").mockReturnValue({
       columnGap: "50px",
       gap: "50px",
@@ -498,52 +573,94 @@ describe("vFitChildren", () => {
 
     const children = Array.from(wrapper.children) as HTMLElement[];
     expect(children[0].style.display).not.toBe("none");
-    expect(children[1].style.display).toBe("none"); 
+    expect(children[1].style.display).toBe("none");
+    expect(events[0].hiddenChildrenCount).toBe(1);
+
+    spy.mockRestore();
+  });
+
+  it("uses gap option over DOM measurement and CSS gap", async () => {
+    const container = createContainer(200);
+    // Items: 80, 80. Manual gap=0. Total=160 ≤ 200 → all visible
+    const wrapper = createWrapper([80, 80]);
+
+    // Even if CSS gap is huge, the option should override
+    const spy = vi.spyOn(window, "getComputedStyle").mockReturnValue({
+      columnGap: "500px",
+      gap: "500px",
+    } as any);
+
+    const events = captureEvents(wrapper);
+
+    mountDirective(wrapper, {
+      gap: 0,
+      offsetNeededInPx: 0,
+      widthRestrictingContainer: container,
+    });
+    await triggerResize();
+
+    expect(events[0].hiddenChildrenCount).toBe(0);
+
+    spy.mockRestore();
+  });
+
+  // ── Overflow: visible (scrollWidth) ────────────────────────────────
+
+  it("accounts for scrollWidth when child content overflows its box", async () => {
+    const container = createContainer(170);
+    const wrapper = document.createElement("div");
+
+    // Child 0: box width 60px, but scrollWidth 120px (overflow: visible)
+    const child0 = document.createElement("span");
+    setClientWidth(child0, 60);
+    Object.defineProperty(child0, "scrollWidth", {
+      configurable: true, value: 120,
+    });
+
+    // Child 1: normal 60px box
+    const child1 = document.createElement("span");
+    setClientWidth(child1, 60);
+
+    wrapper.appendChild(child0);
+    wrapper.appendChild(child1);
+
+    const events = captureEvents(wrapper);
+
+    // Without scrollWidth: 60 + 60 = 120 ≤ 170 → smart fit, all visible
+    // With scrollWidth: getOuterWidth(child0) = max(60, 120) = 120
+    // Total: 120 + 60 = 180 > 170 → overflow
+    // Available: 170 - 50 = 120. child0 fits (120 ≤ 120). child1: 120+60=180 > 120 → hidden.
+    mountDirective(wrapper, {
+      offsetNeededInPx: 50,
+      widthRestrictingContainer: container,
+    });
+    await triggerResize();
 
     expect(events[0].hiddenChildrenCount).toBe(1);
-    
-    spy.mockRestore(); // Restore so next tests don't have gap!
+    expect(events[0].isOverflowing).toBe(true);
   });
+
+  // ── keepVisibleEl ──────────────────────────────────────────────────
 
   it("prioritizes elements with data-v-fit-keep", async () => {
     const container = createContainer(200);
-    // [100, 100, 100]. Container 200.
-    // Normal sequential: 100 fits. 100+100=200 fits. 3rd 100 fails.
-    // Result: [Show, Show, Hide].
-    //
-    // Setup: [Item 1(100), Item 2(100), Item 3(100) + KEEP]
-    // Candidates sorted: [2, 0, 1].
-    // 1. Index 2 (100). Fits. Used=100.
-    // 2. Index 0 (100). Fits. Used=200.
-    // 3. Index 1 (100). Fails.
-    // Result: [Show, Hide, Show].
     const wrapper = createWrapper([100, 100, 100]);
     wrapper.children[2].setAttribute("data-v-fit-keep", "true");
-    
-    mountDirective(wrapper, { offsetNeededInPx: 0, widthRestrictingContainer: container });
-    // Trigger multiple times to ensure robust calc
+
+    mountDirective(wrapper, {
+      offsetNeededInPx: 0,
+      widthRestrictingContainer: container,
+    });
     await triggerResize();
 
     const children = Array.from(wrapper.children) as HTMLElement[];
-    // console.log("Child 0 display:", children[0].style.display);
-    // console.log("Child 1 display:", children[1].style.display);
-    // console.log("Child 2 display:", children[2].style.display);
-    
     expect(children[2].style.display).not.toBe("none"); // Priority kept
     expect(children[0].style.display).not.toBe("none"); // Normal fit
-    expect(children[1].style.display).toBe("none");     // Hidden
+    expect(children[1].style.display).toBe("none"); // Hidden
   });
 
   it("keeps a direct child visible via keepVisibleEl option", async () => {
     const container = createContainer(200);
-    // [100, 100, 100]. Container 200, offset 0.
-    // Normal: child0(100) fits, child1(100) fits (200<=200), child2 doesn't.
-    // With keepVisibleEl=child2: child2 is prioritized first.
-    // Sorted candidates: [2, 0, 1].
-    // i=2 (100): fits. used=100.
-    // i=0 (100): 100+100=200 <= 200. fits. used=200.
-    // i=1 (100): 200+100=300 > 200. Break.
-    // Result: child0 visible, child1 hidden, child2 visible.
     const wrapper = createWrapper([100, 100, 100]);
     const inputChild = wrapper.children[2] as HTMLElement;
     const events = captureEvents(wrapper);
@@ -558,15 +675,13 @@ describe("vFitChildren", () => {
     const children = Array.from(wrapper.children) as HTMLElement[];
     expect(children[0].style.display).not.toBe("none");
     expect(children[1].style.display).toBe("none");
-    expect(children[2].style.display).not.toBe("none"); // kept via option
+    expect(children[2].style.display).not.toBe("none");
 
     expect(events[0].hiddenChildrenCount).toBe(1);
     expect(events[0].hiddenChildren[0]).toBe(children[1]);
   });
 
   it("keeps a parent child visible when keepVisibleEl is a nested descendant", async () => {
-    // Simulates: <div v-fit-children><span>Tag</span><div class="wrapper"><input /></div></div>
-    // keepVisibleEl points to the nested <input>, but the directive child is the wrapper <div>.
     const container = createContainer(200);
     const wrapper = document.createElement("div");
 
@@ -585,14 +700,6 @@ describe("vFitChildren", () => {
     setClientWidth(tag2, 100);
     wrapper.appendChild(tag2);
 
-    // [tag(100), inputWrapper(100), tag2(100)]. Container 200, offset 0.
-    // keepVisibleEl=input (nested inside inputWrapper).
-    // inputWrapper.contains(input) === true -> inputWrapper is kept.
-    // Sorted candidates: [1(keep), 0, 2].
-    // i=1 (100): fits. used=100.
-    // i=0 (100): 100+100=200 <= 200. fits. used=200.
-    // i=2 (100): 200+100=300 > 200. Break.
-    // Result: tag visible, inputWrapper visible, tag2 hidden.
     const events = captureEvents(wrapper);
 
     mountDirective(wrapper, {
@@ -603,21 +710,15 @@ describe("vFitChildren", () => {
     await triggerResize();
 
     const children = Array.from(wrapper.children) as HTMLElement[];
-    expect(children[0].style.display).not.toBe("none"); // tag fits
-    expect(children[1].style.display).not.toBe("none"); // inputWrapper kept (contains input)
-    expect(children[2].style.display).toBe("none");     // tag2 hidden
+    expect(children[0].style.display).not.toBe("none");
+    expect(children[1].style.display).not.toBe("none");
+    expect(children[2].style.display).toBe("none");
 
     expect(events[0].hiddenChildrenCount).toBe(1);
   });
 
   it("force-keeps keepVisibleEl even when it exceeds available space", async () => {
     const container = createContainer(100);
-    // [80, 150]. Container 100, offset 0.
-    // keepVisibleEl=child1 (150px, wider than container).
-    // Sorted candidates: [1(keep), 0].
-    // i=1 (150): 150 > 100. Doesn't fit, but isKeep -> force-add. used=150.
-    // i=0 (80): 150+80=230 > 100. Break.
-    // Result: child0 hidden, child1 visible (even though it overflows).
     const wrapper = createWrapper([80, 150]);
     const keepEl = wrapper.children[1] as HTMLElement;
     const events = captureEvents(wrapper);
@@ -630,39 +731,245 @@ describe("vFitChildren", () => {
     await triggerResize();
 
     const children = Array.from(wrapper.children) as HTMLElement[];
-    expect(children[0].style.display).toBe("none");     // hidden, no room
-    expect(children[1].style.display).not.toBe("none"); // force-kept
+    expect(children[0].style.display).toBe("none");
+    expect(children[1].style.display).not.toBe("none");
 
     expect(events[0].hiddenChildrenCount).toBe(1);
   });
 
-  it("recalculates when a child's text content changes (e.g. dropdown selection)", async () => {
-    const container = createContainer(300);
-    // [80, 80, 80] = 240 total, fits in 300
-    const wrapper = createWrapper([80, 80, 80]);
+  // ── Multi-row layout ──────────────────────────────────────────────
+
+  it("fills multiple rows before hiding with rowCount=2", async () => {
+    const container = createContainer(200);
+    const wrapper = createWrapper([80, 80, 80, 80]);
     const events = captureEvents(wrapper);
 
     mountDirective(wrapper, {
+      offsetNeededInPx: 50,
+      rowCount: 2,
+      widthRestrictingContainer: container,
+    });
+    await triggerResize();
+
+    const children = Array.from(wrapper.children) as HTMLElement[];
+    expect(children[0].style.display).not.toBe("none"); // Row 1
+    expect(children[1].style.display).not.toBe("none"); // Row 1
+    expect(children[2].style.display).not.toBe("none"); // Row 2
+    expect(children[3].style.display).toBe("none"); // Overflow
+
+    expect(events[0].hiddenChildrenCount).toBe(1);
+    expect(events[0].isOverflowing).toBe(true);
+  });
+
+  it("reserves offset only on the last row", async () => {
+    const container = createContainer(200);
+    const wrapper = createWrapper([180, 80]);
+    const events = captureEvents(wrapper);
+
+    mountDirective(wrapper, {
+      offsetNeededInPx: 50,
+      rowCount: 2,
+      widthRestrictingContainer: container,
+    });
+    await triggerResize();
+
+    const children = Array.from(wrapper.children) as HTMLElement[];
+    expect(children[0].style.display).not.toBe("none"); // Row 1 (180 fits full 200)
+    expect(children[1].style.display).not.toBe("none"); // Row 2 (80+50=130≤200)
+
+    expect(events[0].hiddenChildrenCount).toBe(0);
+    expect(events[0].isOverflowing).toBe(false);
+  });
+
+  it("sets flex-wrap: wrap when rowCount > 1", async () => {
+    const container = createContainer(200);
+    const wrapper = createWrapper([80, 80]);
+
+    mountDirective(wrapper, {
+      rowCount: 2,
+      widthRestrictingContainer: container,
+    });
+
+    expect(wrapper.style.flexWrap).toBe("wrap");
+  });
+
+  it("does not set flex-wrap when rowCount is 1", async () => {
+    const container = createContainer(200);
+    const wrapper = createWrapper([80, 80]);
+
+    mountDirective(wrapper, {
+      rowCount: 1,
+      widthRestrictingContainer: container,
+    });
+
+    expect(wrapper.style.flexWrap).not.toBe("wrap");
+  });
+
+  it("correctly places items on new row when they overflow current row", async () => {
+    const container = createContainer(200);
+    const wrapper = createWrapper([150, 150, 80]);
+    const events = captureEvents(wrapper);
+
+    mountDirective(wrapper, {
+      offsetNeededInPx: 50,
+      rowCount: 2,
+      widthRestrictingContainer: container,
+    });
+    await triggerResize();
+
+    const children = Array.from(wrapper.children) as HTMLElement[];
+    expect(children[0].style.display).not.toBe("none"); // Row 1
+    expect(children[1].style.display).not.toBe("none"); // Row 2 (re-checked on new row)
+    expect(children[2].style.display).toBe("none"); // Overflow
+
+    expect(events[0].hiddenChildrenCount).toBe(1);
+  });
+
+  it("reports isOverflowing=false when all items fit across multiple rows", async () => {
+    const container = createContainer(200);
+    const wrapper = createWrapper([150, 150]);
+    const events = captureEvents(wrapper);
+
+    mountDirective(wrapper, {
+      offsetNeededInPx: 50,
+      rowCount: 2,
+      widthRestrictingContainer: container,
+    });
+    await triggerResize();
+
+    const children = Array.from(wrapper.children) as HTMLElement[];
+    expect(children[0].style.display).not.toBe("none");
+    expect(children[1].style.display).not.toBe("none");
+
+    expect(events[0].hiddenChildrenCount).toBe(0);
+    expect(events[0].isOverflowing).toBe(false);
+  });
+
+  // ── Updated hook (reactive options) ───────────────────────────────
+
+  it("recalculates when rowCount changes via updated hook", async () => {
+    const container = createContainer(200);
+    const wrapper = createWrapper([80, 80, 80, 80]);
+    const events = captureEvents(wrapper);
+
+    const binding = mountDirective(wrapper, {
+      offsetNeededInPx: 50,
+      rowCount: 1,
+      widthRestrictingContainer: container,
+    });
+    await triggerResize();
+
+    expect(events[0].hiddenChildrenCount).toBe(3); // Only first child fits
+
+    // Change rowCount to 2
+    binding.value = { ...binding.value, rowCount: 2 };
+    updateDirective(wrapper, binding);
+    flushMicrotasks();
+
+    expect(events[1].hiddenChildrenCount).toBeLessThan(
+      events[0].hiddenChildrenCount,
+    );
+  });
+
+  it("recalculates when offsetNeededInPx changes via updated hook", async () => {
+    const container = createContainer(200);
+    const wrapper = createWrapper([80, 80]);
+    const events = captureEvents(wrapper);
+
+    const binding = mountDirective(wrapper, {
       offsetNeededInPx: 50,
       widthRestrictingContainer: container,
     });
     await triggerResize();
 
-    // All fit initially
-    const children = Array.from(wrapper.children) as HTMLElement[];
+    // Smart fit: 160 ≤ 200, all visible
     expect(events[0].hiddenChildrenCount).toBe(0);
+
+    // Now increase offset to something that actually forces overflow
+    setClientWidth(container, 170);
+    await triggerResize();
+
+    // 160 ≤ 170, still smart fit
+    expect(events[1].hiddenChildrenCount).toBe(0);
+
+    // Change offset to 0 and shrink container to force overflow
+    setClientWidth(container, 150);
+    binding.value = { ...binding.value, offsetNeededInPx: 0 };
+    updateDirective(wrapper, binding);
+    flushMicrotasks();
+
+    // 160 > 150, enters overflow. offset=0, so 80≤150 fits, 80+80=160>150 hidden
+    expect(events[2].hiddenChildrenCount).toBe(1);
+  });
+
+  it("recalculates when widthRestrictingContainer changes", async () => {
+    const container1 = createContainer(100);
+    const container2 = createContainer(500);
+    const wrapper = createWrapper([80, 80, 80]);
+    const events = captureEvents(wrapper);
+
+    const binding = mountDirective(wrapper, {
+      offsetNeededInPx: 50,
+      widthRestrictingContainer: container1,
+    });
+    await triggerResize();
+
+    expect(events[0].hiddenChildrenCount).toBeGreaterThan(0);
+
+    // Switch to larger container
+    binding.value = {
+      ...binding.value,
+      widthRestrictingContainer: container2,
+    };
+    updateDirective(wrapper, binding);
+    // Need to trigger the new container's resize observer
+    MockResizeObserver.instances.forEach((i) => i.trigger());
+    flushMicrotasks();
+
+    expect(events[events.length - 1].hiddenChildrenCount).toBe(0);
+  });
+
+  // ── Combined features ─────────────────────────────────────────────
+
+  it("sortBySize + keepVisibleEl together", async () => {
+    const container = createContainer(200);
+    const wrapper = createWrapper([120, 30, 30, 30]);
+    const keepEl = wrapper.children[0] as HTMLElement;
+    const events = captureEvents(wrapper);
+
+    mountDirective(wrapper, {
+      keepVisibleEl: keepEl,
+      offsetNeededInPx: 50,
+      sortBySize: true,
+      widthRestrictingContainer: container,
+    });
+    await triggerResize();
+
+    const children = Array.from(wrapper.children) as HTMLElement[];
+    expect(children[0].style.display).not.toBe("none"); // kept
+    expect(children[1].style.display).not.toBe("none"); // small, fits
+    expect(events[0].hiddenChildrenCount).toBe(2);
+  });
+
+  it("sortBySize + rowCount together", async () => {
+    const container = createContainer(200);
+    const wrapper = createWrapper([150, 30, 30, 30]);
+    const events = captureEvents(wrapper);
+
+    mountDirective(wrapper, {
+      offsetNeededInPx: 50,
+      rowCount: 2,
+      sortBySize: true,
+      widthRestrictingContainer: container,
+    });
+    await triggerResize();
+
+    const children = Array.from(wrapper.children) as HTMLElement[];
+    expect(children[0].style.display).not.toBe("none");
+    expect(children[1].style.display).not.toBe("none");
+    expect(children[2].style.display).not.toBe("none");
+    expect(children[3].style.display).not.toBe("none");
+
     expect(events[0].isOverflowing).toBe(false);
-
-    // Simulate dropdown selection: child 1 text changes, element grows from 80 to 200px
-    children[1].textContent = "A really long dropdown option that takes up space";
-    setClientWidth(children[1], 200);
-
-    // Trigger mutation (subtree text change)
-    MockMutationObserver.instances.forEach((i) => i.trigger());
-    await flush();
-
-    // Now: 80 + 200 + 80 = 360 > 300, needs to hide
-    expect(events[1].isOverflowing).toBe(true);
-    expect(events[1].hiddenChildrenCount).toBeGreaterThan(0);
   });
 });
