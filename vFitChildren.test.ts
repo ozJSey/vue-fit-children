@@ -635,4 +635,34 @@ describe("vFitChildren", () => {
 
     expect(events[0].hiddenChildrenCount).toBe(1);
   });
+
+  it("recalculates when a child's text content changes (e.g. dropdown selection)", async () => {
+    const container = createContainer(300);
+    // [80, 80, 80] = 240 total, fits in 300
+    const wrapper = createWrapper([80, 80, 80]);
+    const events = captureEvents(wrapper);
+
+    mountDirective(wrapper, {
+      offsetNeededInPx: 50,
+      widthRestrictingContainer: container,
+    });
+    await triggerResize();
+
+    // All fit initially
+    const children = Array.from(wrapper.children) as HTMLElement[];
+    expect(events[0].hiddenChildrenCount).toBe(0);
+    expect(events[0].isOverflowing).toBe(false);
+
+    // Simulate dropdown selection: child 1 text changes, element grows from 80 to 200px
+    children[1].textContent = "A really long dropdown option that takes up space";
+    setClientWidth(children[1], 200);
+
+    // Trigger mutation (subtree text change)
+    MockMutationObserver.instances.forEach((i) => i.trigger());
+    await flush();
+
+    // Now: 80 + 200 + 80 = 360 > 300, needs to hide
+    expect(events[1].isOverflowing).toBe(true);
+    expect(events[1].hiddenChildrenCount).toBeGreaterThan(0);
+  });
 });

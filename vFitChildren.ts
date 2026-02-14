@@ -376,7 +376,11 @@ function handleFitChildren(
         });
         scheduleOverflowCalculation(s);
       });
-      mutationObserver.observe(state.targetElement, { childList: true });
+      mutationObserver.observe(state.targetElement, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+      });
       state.mutationObserver = mutationObserver;
     }
   }
