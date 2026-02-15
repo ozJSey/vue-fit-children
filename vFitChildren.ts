@@ -141,7 +141,9 @@ const measureGap = (
   }
 
   // Fallback: CSS gap value
-  return parsePx(elStyle.columnGap || elStyle.gap || "0");
+  return elStyle.columnGap
+    ? parsePx(elStyle.columnGap)
+    : parsePx(elStyle.gap) || 0;
 };
 
 /**
@@ -227,8 +229,9 @@ const calculateOverflow = (targetElement: HTMLElement | undefined) => {
     if (elAncestor) {
       // Subtract widths of all siblings within the container (overflow button, action buttons, etc.)
       const parentStyle = window.getComputedStyle(parentContainer);
-      const parentGap =
-        parsePx(parentStyle.columnGap) || parsePx(parentStyle.gap) || 0;
+      const parentGap = parentStyle.columnGap
+        ? parsePx(parentStyle.columnGap)
+        : parsePx(parentStyle.gap) || 0;
 
       for (const sibling of Array.from(parentContainer.children)) {
         if (sibling !== elAncestor && isInFlow(sibling as HTMLElement)) {
@@ -236,15 +239,15 @@ const calculateOverflow = (targetElement: HTMLElement | undefined) => {
             getOuterWidth(sibling as HTMLElement) + parentGap;
         }
       }
-    }
 
-    // Subtract overhead from el and any wrappers between el and parentContainer
-    let current: HTMLElement | null = el;
-    while (current && current !== parentContainer) {
-      availableSpaceForChildren -= getHorizontalOverhead(
-        window.getComputedStyle(current),
-      );
-      current = current.parentElement;
+      // Subtract overhead from el and any wrappers between el and parentContainer
+      let current: HTMLElement | null = el;
+      while (current && current !== parentContainer) {
+        availableSpaceForChildren -= getHorizontalOverhead(
+          window.getComputedStyle(current),
+        );
+        current = current.parentElement;
+      }
     }
   }
 

@@ -1,6 +1,6 @@
 {
   "name": "v-fit-children",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "Vue directive that auto-hides children that don't fit within a container's width. Useful for chips, badges, tags, and other inline elements in tight spaces.",
   "author": "Ozgur Seyidoglu",
   "license": "MIT",

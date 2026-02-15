@@ -290,9 +290,13 @@ Requires browsers that support `ResizeObserver`, `MutationObserver`, and `getBou
 
 ## Changelog
 
+### 1.3.1
+
+- Fixed a very niche case of columnGap may exist as 0, but gap could be more
+
 ### 1.3.0
 
-- Added ancestoral recognization, meaning children wrapped in other divs will also be considered for the overflow.
+- Added ancestral recognition, meaning children wrapped in other divs will also be considered for the overflow.
 
 ### 1.2.0
 
