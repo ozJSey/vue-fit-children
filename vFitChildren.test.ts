@@ -951,6 +951,135 @@ describe("vFitChildren", () => {
     expect(events[0].hiddenChildrenCount).toBe(2);
   });
 
+  // ── data option & hiddenIndices ──────────────────────────────────
+
+  it("includes hiddenIndices in the event detail", async () => {
+    const container = createContainer(200);
+    const wrapper = createWrapper([80, 80, 80, 80]);
+    const events = captureEvents(wrapper);
+
+    mountDirective(wrapper, {
+      offsetNeededInPx: 50,
+      widthRestrictingContainer: container,
+    });
+    await triggerResize();
+
+    expect(events[0].hiddenIndices).toEqual([1, 2, 3]);
+  });
+
+  it("returns empty hiddenIndices when all children fit", async () => {
+    const container = createContainer(500);
+    const wrapper = createWrapper([80, 80, 80]);
+    const events = captureEvents(wrapper);
+
+    mountDirective(wrapper, {
+      offsetNeededInPx: 50,
+      widthRestrictingContainer: container,
+    });
+    await triggerResize();
+
+    expect(events[0].hiddenIndices).toEqual([]);
+  });
+
+  it("maps hidden children to data objects when data is provided", async () => {
+    const container = createContainer(200);
+    const wrapper = createWrapper([80, 80, 80, 80]);
+    const data = [
+      { id: 1, name: "Alpha" },
+      { id: 2, name: "Beta" },
+      { id: 3, name: "Gamma" },
+      { id: 4, name: "Delta" },
+    ];
+    const events = captureEvents(wrapper);
+
+    mountDirective(wrapper, {
+      data,
+      offsetNeededInPx: 50,
+      widthRestrictingContainer: container,
+    });
+    await triggerResize();
+
+    expect(events[0].hiddenData).toEqual([
+      { id: 2, name: "Beta" },
+      { id: 3, name: "Gamma" },
+      { id: 4, name: "Delta" },
+    ]);
+    expect(events[0].hiddenIndices).toEqual([1, 2, 3]);
+  });
+
+  it("does not include hiddenData when data option is omitted", async () => {
+    const container = createContainer(200);
+    const wrapper = createWrapper([80, 80, 80]);
+    const events = captureEvents(wrapper);
+
+    mountDirective(wrapper, {
+      offsetNeededInPx: 50,
+      widthRestrictingContainer: container,
+    });
+    await triggerResize();
+
+    expect(events[0].hiddenData).toBeUndefined();
+  });
+
+  it("handles data array shorter than children count", async () => {
+    const container = createContainer(200);
+    const wrapper = createWrapper([80, 80, 80, 80]);
+    const data = [{ id: 1 }, { id: 2 }];
+    const events = captureEvents(wrapper);
+
+    mountDirective(wrapper, {
+      data,
+      offsetNeededInPx: 50,
+      widthRestrictingContainer: container,
+    });
+    await triggerResize();
+
+    expect(events[0].hiddenIndices).toEqual([1, 2, 3]);
+    expect(events[0].hiddenData).toEqual([{ id: 2 }]);
+  });
+
+  it("hiddenData works with sortBySize", async () => {
+    const container = createContainer(200);
+    const wrapper = createWrapper([80, 100, 30, 30]);
+    const data = ["a", "b", "c", "d"];
+    const events = captureEvents(wrapper);
+
+    mountDirective(wrapper, {
+      data,
+      offsetNeededInPx: 50,
+      sortBySize: true,
+      widthRestrictingContainer: container,
+    });
+    await triggerResize();
+
+    expect(events[0].hiddenData).toEqual(["b"]);
+    expect(events[0].hiddenIndices).toEqual([1]);
+  });
+
+  it("recalculates when data array changes", async () => {
+    const container = createContainer(200);
+    const wrapper = createWrapper([80, 80, 80]);
+    const events = captureEvents(wrapper);
+
+    const binding = mountDirective(wrapper, {
+      data: [{ id: 1 }, { id: 2 }, { id: 3 }],
+      offsetNeededInPx: 50,
+      widthRestrictingContainer: container,
+    });
+    await triggerResize();
+
+    expect(events[0].hiddenData).toEqual([{ id: 2 }, { id: 3 }]);
+
+    binding.value = {
+      ...binding.value,
+      data: [{ id: 10 }, { id: 20 }, { id: 30 }],
+    };
+    updateDirective(wrapper, binding);
+    flushMicrotasks();
+
+    expect(events[1].hiddenData).toEqual([{ id: 20 }, { id: 30 }]);
+  });
+
   it("sortBySize + rowCount together", async () => {
     const container = createContainer(200);
     const wrapper = createWrapper([150, 30, 30, 30]);

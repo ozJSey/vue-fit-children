@@ -101,6 +101,7 @@ All options are passed as the directive value:
 | `widthRestrictingContainer` | `HTMLElement` | Directive Element | The element whose width constrains the children. Defaults to the element the directive is on. |
 | `offsetNeededInPx` | `number` | `50` | Reserved space in px (e.g. for a "+N more" badge). Set to `0` if you don't need reserved space. |
 | `gap` | `number` | Computed `gap` | Manually specify the gap between items in pixels. Useful if `gap` CSS is not used (e.g. inline-block margins). |
+| `data` | `unknown[]` | — | The same array used in `v-for`. When provided, the event includes `hiddenData` with the corresponding data objects for hidden children. |
 | `sortBySize` | `boolean` | `false` | If `true`, hides larger items first to maximize the number of visible items. If `false`, hides items from the end. |
 | `keepVisibleEl` | `HTMLElement` | — | An element (or descendant of a child) that should never be hidden. Useful for inputs or interactive elements. |
 | `rowCount` | `number` | `1` | Number of rows to fill before hiding. Offset is only reserved on the last row. If >1, sets `flex-wrap: wrap`. |
@@ -119,7 +120,8 @@ import type { FitChildrenOptions, FitChildrenEventDetail } from "v-fit-children"
 ### `FitChildrenOptions`
 
 ```ts
-interface FitChildrenOptions {
+interface FitChildrenOptions<T = unknown> {
+  data?: T[];
   gap?: number;
   keepVisibleEl?: HTMLElement;
   offsetNeededInPx?: number;
@@ -132,9 +134,11 @@ interface FitChildrenOptions {
 ### `FitChildrenEventDetail`
 
 ```ts
-type FitChildrenEventDetail = {
+type FitChildrenEventDetail<T = unknown> = {
   hiddenChildren: HTMLElement[];
   hiddenChildrenCount: number;
+  hiddenData?: T[];
+  hiddenIndices: number[];
   isOverflowing: boolean;
 };
 ```
@@ -144,9 +148,16 @@ type FitChildrenEventDetail = {
 Vue's `@fit-children-updated` handler receives a `CustomEvent`. You can type it like this:
 
 ```ts
-function onUpdate(e: CustomEvent<FitChildrenEventDetail>) {
+interface Tag {
+  id: number;
+  label: string;
+}
+
+function onUpdate(e: CustomEvent<FitChildrenEventDetail<Tag>>) {
   console.log(e.detail.hiddenChildrenCount);
   console.log(e.detail.hiddenChildren);   // HTMLElement[]
+  console.log(e.detail.hiddenIndices);    // number[]
+  console.log(e.detail.hiddenData);       // Tag[] | undefined
   console.log(e.detail.isOverflowing);    // boolean
 }
 ```
@@ -168,6 +179,8 @@ The event's `detail` contains:
 |---|---|---|
 | `hiddenChildrenCount` | `number` | Number of children that were hidden |
 | `hiddenChildren` | `HTMLElement[]` | Direct references to the hidden DOM elements |
+| `hiddenIndices` | `number[]` | DOM indices of the hidden children |
+| `hiddenData` | `unknown[]` | Data objects for hidden children (only present when `data` option is provided) |
 | `isOverflowing` | `boolean` | `true` if any children were hidden, `false` if all fit |
 
 When all children fit (including the offset), `isOverflowing` is `false` and no offset space is reserved — the "+N" badge is unnecessary.
@@ -247,6 +260,49 @@ Use `rowCount` to allow children to fill multiple rows before hiding:
 
 The offset (`offsetNeededInPx`) is only reserved on the **last** row. All preceding rows use the full container width.
 
+## Data mapping
+
+Pass your `v-for` array via the `data` option to receive the corresponding data objects for hidden children in the event:
+
+```vue
+<script setup lang="ts">
+import { ref } from "vue";
+import { vFitChildren, type FitChildrenEventDetail } from "v-fit-children";
+
+interface Tag {
+  id: number;
+  label: string;
+  color: string;
+}
+
+const tags = ref<Tag[]>([
+  { id: 1, label: "Vue", color: "green" },
+  { id: 2, label: "React", color: "blue" },
+  { id: 3, label: "Angular", color: "red" },
+  { id: 4, label: "Svelte", color: "orange" },
+]);
+const hiddenTags = ref<Tag[]>([]);
+
+function onUpdate(e: CustomEvent<FitChildrenEventDetail<Tag>>) {
+  hiddenTags.value = e.detail.hiddenData ?? [];
+}
+</script>
+
+<template>
+  <div
+    v-fit-children="{ data: tags, offsetNeededInPx: 50 }"
+    @fit-children-updated="onUpdate"
+  >
+    <span v-for="tag in tags" :key="tag.id">{{ tag.label }}</span>
+  </div>
+  <select v-if="hiddenTags.length">
+    <option v-for="tag in hiddenTags" :key="tag.id">{{ tag.label }}</option>
+  </select>
+</template>
+```
+
+The `data` array must map 1:1 with the directive's immediate children. `hiddenIndices` is always provided regardless of the `data` option, so you can also map manually if needed.
+
 ## Inline "+N" badge
 
 To keep the badge inline with the chips (instead of below), wrap both in a flex container and give the directive element `flex: 1`:
@@ -289,6 +345,12 @@ Set `offsetNeededInPx: 0` since the badge lives outside the directive element.
 Requires browsers that support `ResizeObserver`, `MutationObserver`, and `getBoundingClientRect`. All modern browsers (Chrome, Firefox, Safari, Edge) are supported.
 
 ## Changelog
+
+### 1.4.0
+
+- Added `data` option to pass your `v-for` array and receive typed data objects for hidden children via `hiddenData`
+- Added `hiddenIndices` to the event detail — always contains DOM indices of hidden children
+- Added 7 new tests for the data option and hidden indices
 
 ### 1.3.1
 

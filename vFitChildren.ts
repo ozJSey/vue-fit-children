@@ -32,6 +32,7 @@ import { type Directive, type DirectiveBinding } from 'vue';
 
 interface FitChildrenState {
   childResizeObserver?: ResizeObserver;
+  data?: unknown[];
   gapFromOption?: number;
   keepVisibleEl?: HTMLElement;
   mutationObserver?: MutationObserver;
@@ -47,13 +48,16 @@ interface FitChildrenState {
   targetElement?: HTMLElement;
 }
 
-export type FitChildrenEventDetail = {
+export type FitChildrenEventDetail<T = unknown> = {
   hiddenChildren: HTMLElement[];
   hiddenChildrenCount: number;
+  hiddenData?: T[];
+  hiddenIndices: number[];
   isOverflowing: boolean;
 };
 
-export interface FitChildrenOptions {
+export interface FitChildrenOptions<T = unknown> {
+  data?: T[];
   gap?: number;
   keepVisibleEl?: HTMLElement;
   offsetNeededInPx?: number;
@@ -210,6 +214,7 @@ const calculateOverflow = (targetElement: HTMLElement | undefined) => {
   if (!state) return;
 
   const {
+    data,
     parentContainer,
     targetElement: el,
     offsetNeededInPx,
@@ -281,6 +286,8 @@ const calculateOverflow = (targetElement: HTMLElement | undefined) => {
     dispatchUpdate(el, {
       hiddenChildren: [],
       hiddenChildrenCount: 0,
+      hiddenData: data ? [] : undefined,
+      hiddenIndices: [],
       isOverflowing: false,
     });
     return;
@@ -302,6 +309,7 @@ const calculateOverflow = (targetElement: HTMLElement | undefined) => {
 
   // Pack children row-by-row; offset is only reserved on the last row
   const hiddenChildren: HTMLElement[] = [];
+  const hiddenIndices: number[] = [];
   const visibleIndices = new Set<number>();
   const strictWidthLastRow = availableSpaceForChildren - offsetNeededInPx;
   let usedWidth = 0;
@@ -348,14 +356,20 @@ const calculateOverflow = (targetElement: HTMLElement | undefined) => {
     } else {
       hideChild(child);
       hiddenChildren.push(child);
+      hiddenIndices.push(i);
     }
   });
 
   const isOverflowing = hiddenChildren.length > 0;
+  const hiddenData = data
+    ? hiddenIndices.filter((i) => i < data.length).map((i) => data[i])
+    : undefined;
 
   dispatchUpdate(el, {
     hiddenChildren,
     hiddenChildrenCount: hiddenChildren.length,
+    hiddenData,
+    hiddenIndices,
     isOverflowing,
   });
 };
@@ -383,6 +397,7 @@ function handleFitChildren(
   if (!state) {
     state = {
       childResizeObserver: undefined,
+      data: binding.value?.data,
       gapFromOption: binding.value?.gap,
       keepVisibleEl: binding.value?.keepVisibleEl,
       mutationObserver: undefined,
@@ -400,6 +415,10 @@ function handleFitChildren(
     stateMap.set(wrapperEl, state);
   } else {
     let needsUpdate = false;
+    if (binding.value?.data !== state.data) {
+      state.data = binding.value?.data;
+      needsUpdate = true;
+    }
     if (binding.value?.gap !== state.gapFromOption) {
       state.gapFromOption = binding.value?.gap;
       needsUpdate = true;
