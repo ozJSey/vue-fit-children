@@ -9,15 +9,16 @@ A Vue 3 directive that automatically hides child elements that don't fit within 
 ## Features
 
 - Hides children that overflow the container width
-- Emits a custom event with hidden children count and references (for "+N more" indicators)
+- Emits a custom event with hidden children count, references, and optional data mapping (for "+N more" indicators)
 - Supports `gap` / `column-gap` in parent container
 - Accounts for margins, padding, and borders on both container and children
-- Option to hide largest items first (`sortBySize`) to maximize visible count
+- Accounts for content overflow (`overflow: visible`) via `scrollWidth`
 - Pin specific children so they are never hidden (`keepVisibleEl` or `data-v-fit-keep`)
-- Multi-row support via `rowCount`
+- Pass your `v-for` array via `data` to receive typed `hiddenData` and `hiddenIndices`
 - Responds to container resizes via `ResizeObserver`
 - Monitors individual child size changes via `ResizeObserver`
 - Detects child additions/removals via `MutationObserver`
+- Uses a ghost DOM + `IntersectionObserver` for accurate overflow detection
 - Batches recalculations with `requestAnimationFrame` for performance
 - Written in TypeScript — ships with full type declarations
 
@@ -102,9 +103,7 @@ All options are passed as the directive value:
 | `offsetNeededInPx` | `number` | `50` | Reserved space in px (e.g. for a "+N more" badge). Set to `0` if you don't need reserved space. |
 | `gap` | `number` | Computed `gap` | Manually specify the gap between items in pixels. Useful if `gap` CSS is not used (e.g. inline-block margins). |
 | `data` | `unknown[]` | — | The same array used in `v-for`. When provided, the event includes `hiddenData` with the corresponding data objects for hidden children. |
-| `sortBySize` | `boolean` | `false` | If `true`, hides larger items first to maximize the number of visible items. If `false`, hides items from the end. |
 | `keepVisibleEl` | `HTMLElement` | — | An element (or descendant of a child) that should never be hidden. Useful for inputs or interactive elements. |
-| `rowCount` | `number` | `1` | Number of rows to fill before hiding. Offset is only reserved on the last row. If >1, sets `flex-wrap: wrap`. |
 
 Options are reactive — changing them via the directive value triggers a recalculation.
 
@@ -125,8 +124,6 @@ interface FitChildrenOptions<T = unknown> {
   gap?: number;
   keepVisibleEl?: HTMLElement;
   offsetNeededInPx?: number;
-  rowCount?: number;
-  sortBySize?: boolean;
   widthRestrictingContainer?: HTMLElement;
 }
 ```
@@ -231,35 +228,6 @@ Add the `data-v-fit-keep` attribute directly on the child element — no ref nee
 
 Both methods can be used together. If a kept element is wider than the available space, it stays visible anyway — better to overflow than to hide an input the user is typing in.
 
-## Sorting by size
-
-By default, children are hidden from the end (last child first). Enable `sortBySize` to hide the largest children first, maximizing the number of visible items:
-
-```vue
-<div v-fit-children="{ widthRestrictingContainer: containerRef, sortBySize: true }">
-  <span style="width: 200px">Wide tag</span>
-  <span style="width: 60px">Small</span>
-  <span style="width: 60px">Small</span>
-</div>
-```
-
-With `sortBySize: true`, the "Wide tag" is hidden first, leaving both small tags visible.
-
-## Multi-row layout
-
-Use `rowCount` to allow children to fill multiple rows before hiding:
-
-```vue
-<div
-  v-fit-children="{ widthRestrictingContainer: containerRef, rowCount: 2 }"
-  style="flex-wrap: wrap; gap: 8px;"
->
-  <span v-for="tag in manyTags" :key="tag">{{ tag }}</span>
-</div>
-```
-
-The offset (`offsetNeededInPx`) is only reserved on the **last** row. All preceding rows use the full container width.
-
 ## Data mapping
 
 Pass your `v-for` array via the `data` option to receive the corresponding data objects for hidden children in the event:
@@ -326,14 +294,14 @@ Set `offsetNeededInPx: 0` since the badge lives outside the directive element.
 
 ## How it works
 
-1. Before mount, the directive sets up `ResizeObserver` on the container and children, and a `MutationObserver` for child list changes. Observers are registered before DOM insertion so the first calculation fires as soon as layout completes — no flash of unstyled children.
+1. On mount, the directive sets up `ResizeObserver` on the container (and any parent elements between the wrapper and container), plus a `MutationObserver` for child list changes.
 2. When any observer fires, a recalculation is scheduled via `requestAnimationFrame` (deduplicated — only one pending at a time).
-3. The calculation temporarily reveals hidden children, measures all widths via `getBoundingClientRect` (accounting for margins and `gap`), then determines which fit.
-4. If all children fit without needing the offset, everything stays visible — no "+N" badge is needed.
-5. Otherwise, candidates are sorted by priority (`keepVisibleEl` / `data-v-fit-keep` first), then by size (if `sortBySize`), then by DOM order.
-6. Children are placed row by row (up to `rowCount`). Offset is only reserved on the last row.
-7. A `fit-children-updated` event is dispatched so you can render a "+N more" indicator.
-8. On unmount, all observers are disconnected, hidden children are restored, and any `flex-wrap` style set by the directive is cleaned up.
+3. A hidden **ghost element** (`display: flex; overflow: hidden`) is appended to `document.body`. Real children are cloned into it — kept children (`keepVisibleEl` / `data-v-fit-keep`) go first with `flex-shrink: 0`, then the rest in DOM order.
+4. The ghost's width is set to `containerWidth - offsetNeededInPx`. If all children fit without the offset (smart fit), the full container width is used instead.
+5. An `IntersectionObserver` (root = ghost, threshold = 1.0) determines which clones are fully visible vs. clipped.
+6. Visibility results are mapped back to the real children: visible clones → show, clipped clones → hide.
+7. A `fit-children-updated` event is dispatched with hidden children, indices, optional data mapping, and overflow status.
+8. On unmount, all observers are disconnected, the ghost is removed, hidden children are restored, and internal state is cleaned up.
 
 ## Known limitations
 
@@ -346,30 +314,25 @@ Requires browsers that support `ResizeObserver`, `MutationObserver`, and `getBou
 
 ## Changelog
 
-### 1.4.0
+### 2.0.0
 
-- Added `data` option to pass your `v-for` array and receive typed data objects for hidden children via `hiddenData`
+**Breaking changes:**
+
+- Removed `sortBySize` option — children are now hidden purely by overflow in DOM order
+- Removed `rowCount` option — the directive operates on a single row
+
+**New features:**
+
+- Added `data` option to pass your `v-for` array and receive typed `hiddenData` in the event
 - Added `hiddenIndices` to the event detail — always contains DOM indices of hidden children
-- Added 7 new tests for the data option and hidden indices
+- `FitChildrenOptions` and `FitChildrenEventDetail` are now generic (`<T = unknown>`)
 
-### 1.3.1
+**Internal:**
 
-- Fixed a very niche case of columnGap may exist as 0, but gap could be more
-
-### 1.3.0
-
-- Added ancestral recognition, meaning children wrapped in other divs will also be considered for the overflow.
-
-### 1.2.0
-
-- Removed width caching — all children are measured fresh on every recalculation
-- Fixed row transition bug where items that could fit on the next row were incorrectly hidden
-- Fixed `isOverflowing` reporting `true` even when all items fit across multiple rows
-- Fixed unmount not restoring hidden children (`display: none` persisted after directive removal)
-- Fixed unmount not cleaning up `flex-wrap` style set by `rowCount > 1`
-- Reverted MutationObserver to `childList` only — child `ResizeObserver` handles size changes
-- Simplified scheduling to `requestAnimationFrame` only (removed `nextTick` wrapper)
-- Added 15 new tests: multi-row layout, `updated` hook, unmount cleanup, combined features
+- Rewrote overflow detection to use a ghost DOM + `IntersectionObserver` instead of manual width calculation
+- Accounts for content overflow (`overflow: visible`) via `scrollWidth`
+- Fixed post-unmount ghost DOM leak when a `requestAnimationFrame` callback was pending
+- Fixed `gap` option being ignored (now correctly applied to the ghost element)
 
 ### 1.0.1
 
@@ -379,7 +342,7 @@ Requires browsers that support `ResizeObserver`, `MutationObserver`, and `getBou
 
 ### 1.0.0
 
-- Initial release with all core features: auto-hide, smart fit, gap support, `sortBySize`, `keepVisibleEl`, `data-v-fit-keep`, multi-row (`rowCount`), ResizeObserver/MutationObserver, and RAF batching
+- Initial release with core features: auto-hide, smart fit, gap support, `keepVisibleEl`, `data-v-fit-keep`, ResizeObserver/MutationObserver, and RAF batching
 
 ## License
 

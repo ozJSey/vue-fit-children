@@ -1,611 +1,437 @@
-import { type Directive, type DirectiveBinding } from 'vue';
+import { type Directive } from 'vue';
 
-
-
-/**
- * A Vue directive that manages visibility of child elements within a container.
- *
- * Useful for chips, badges, tags, or any list of inline elements in a tight space.
- * Children that don't fit within the container's width are automatically hidden,
- * and a custom event is emitted with details about hidden children
- * (enabling "+N more" indicators).
- *
- * Features:
- * - Monitors the container's width via ResizeObserver
- * - Monitors individual child sizes via ResizeObserver
- * - Detects child additions/removals and content changes via MutationObserver
- * - Uses queueMicrotask for same-frame, batched recalculation
- * - Measures actual gap from rendered DOM positions (works with web components)
- * - Accounts for content overflow (overflow: visible) via scrollWidth
- * - Supports multi-row layout via rowCount
- * - Supports priority pinning via keepVisibleEl / data-v-fit-keep
- * - Supports hiding largest items first via sortBySize
- *
- * Usage:
- * <div v-fit-children="{ widthRestrictingContainer: containerRef, offsetNeededInPx: 50 }">
- *   <chip v-for="item in items" />
- * </div>
- *
- * The directive emits a 'fit-children-updated' event with details about
- * hidden children count and overflow status.
- */
-
-interface FitChildrenState {
-  childResizeObserver?: ResizeObserver;
-  data?: unknown[];
-  gapFromOption?: number;
-  keepVisibleEl?: HTMLElement;
-  mutationObserver?: MutationObserver;
-  offsetNeededInPx: number;
-  originalFlexWrap?: string;
-  parentContainer?: HTMLElement;
-  parentMutationObserver?: MutationObserver;
-  pendingCalc: boolean;
-  resizeObserver?: ResizeObserver;
-  rowCount: number;
-  siblingResizeObserver?: ResizeObserver;
-  sortBySize: boolean;
-  targetElement?: HTMLElement;
+export type FitChildrenOptions<T = unknown> = {
+  data?: T[]
+  gap?: number
+  keepVisibleEl?: HTMLElement
+  offsetNeededInPx?: number
+  widthRestrictingContainer?: HTMLElement
 }
 
 export type FitChildrenEventDetail<T = unknown> = {
-  hiddenChildren: HTMLElement[];
-  hiddenChildrenCount: number;
-  hiddenData?: T[];
-  hiddenIndices: number[];
-  isOverflowing: boolean;
-};
-
-export interface FitChildrenOptions<T = unknown> {
-  data?: T[];
-  gap?: number;
-  keepVisibleEl?: HTMLElement;
-  offsetNeededInPx?: number;
-  rowCount?: number;
-  sortBySize?: boolean;
-  widthRestrictingContainer?: HTMLElement;
+  hiddenChildren: HTMLElement[]
+  hiddenChildrenCount: number
+  hiddenData?: T[]
+  hiddenIndices: number[]
+  isOverflowing: boolean
 }
 
-const DEFAULT_OFFSET_PX = 50;
-const HIDDEN_ATTR = "data-v-fit-hidden";
-const KEEP_ATTR = "data-v-fit-keep";
-const EVENT_NAME = "fit-children-updated";
+type FitChildrenState<T = unknown> = {
+  data: T[] | undefined
+  gapFromOption: number | undefined
+  ghostElement: HTMLElement | undefined
+  ghostObservableChildren: HTMLElement[]
+  intersectionObserver: IntersectionObserver | undefined
+  keepVisibleEl: HTMLElement | undefined
+  keepVisibleResizeObserver: ResizeObserver | undefined
+  mutationObserver: MutationObserver | undefined
+  offsetNeededInPx: number
+  pendingCalc: boolean
+  realIndexToGhostChild: Map<number, HTMLElement>
+  resizeObserver: ResizeObserver | undefined
+  targetElement: HTMLElement | undefined
+  visibilityMap: WeakMap<Element, boolean>
+  widthRestrictingContainer: HTMLElement | undefined
+}
 
-const stateMap = new WeakMap<HTMLElement, FitChildrenState>();
+const DEFAULT_OFFSET_PX = 50
+const HIDDEN_ATTR = 'data-v-fit-hidden'
+const KEEP_ATTR = 'data-v-fit-keep'
+const EVENT_NAME = 'fit-children-updated'
+const stateMap = new WeakMap<HTMLElement, FitChildrenState>()
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-/** Parse a CSS pixel value, returning 0 for invalid/missing values. */
-const parsePx = (value: string): number => parseFloat(value) || 0;
+const parsePx = (value: string): number => parseFloat(value) || 0
 
-/** Total horizontal overhead of an element (margin + border + padding). */
-const getHorizontalOverhead = (style: CSSStyleDeclaration): number =>
-  parsePx(style.marginLeft) +
-  parsePx(style.marginRight) +
-  parsePx(style.borderLeftWidth) +
-  parsePx(style.borderRightWidth) +
-  parsePx(style.paddingLeft) +
-  parsePx(style.paddingRight);
-
-/** Content width of an element (inner width, excluding border and padding). */
 const getContentWidth = (
-  el: HTMLElement,
-  style: CSSStyleDeclaration = window.getComputedStyle(el),
+  element: HTMLElement,
+  style = window.getComputedStyle(element),
 ): number =>
-  el.getBoundingClientRect().width -
+  element.getBoundingClientRect().width -
   parsePx(style.borderLeftWidth) -
   parsePx(style.borderRightWidth) -
   parsePx(style.paddingLeft) -
-  parsePx(style.paddingRight);
+  parsePx(style.paddingRight)
 
-/**
- * Outer width of an element including content overflow.
- * Uses Math.max(borderBoxWidth, scrollWidth + borders) so elements with
- * overflow: visible report their actual needed width, not just their box.
- */
-const getOuterWidth = (el: HTMLElement): number => {
-  const style = window.getComputedStyle(el);
-  const borderBoxWidth = el.getBoundingClientRect().width;
-  const borders =
-    parsePx(style.borderLeftWidth) + parsePx(style.borderRightWidth);
-  const neededWidth = el.scrollWidth + borders;
-  return (
-    Math.max(borderBoxWidth, neededWidth) +
-    parsePx(style.marginLeft) +
-    parsePx(style.marginRight)
-  );
-};
-
-/**
- * Measure the actual rendered gap between the first two children.
- * This reads real DOM positions instead of trusting CSS gap,
- * which is unreliable with web components, margins, and Shadow DOM.
- * Falls back to CSS gap if children aren't on the same row.
- */
-const measureGap = (
-  children: HTMLElement[],
-  elStyle: CSSStyleDeclaration,
-  gapFromOption?: number,
-): number => {
-  if (gapFromOption !== undefined) return gapFromOption;
-  if (children.length < 2) return 0;
-
-  const rect0 = children[0].getBoundingClientRect();
-  const rect1 = children[1].getBoundingClientRect();
-
-  // Only trust DOM measurement if both children are on the same row
-  const sameRow = Math.abs(rect0.top - rect1.top) < rect0.height * 0.5;
-  if (sameRow && rect1.left > rect0.right) {
-    const style0 = window.getComputedStyle(children[0]);
-    const style1 = window.getComputedStyle(children[1]);
-    // Gap = space between margin boxes
-    const marginBoxRight0 = rect0.right + parsePx(style0.marginRight);
-    const marginBoxLeft1 = rect1.left - parsePx(style1.marginLeft);
-    return Math.max(0, marginBoxLeft1 - marginBoxRight0);
-  }
-
-  // Fallback: CSS gap value
-  return elStyle.columnGap
-    ? parsePx(elStyle.columnGap)
-    : parsePx(elStyle.gap) || 0;
-};
-
-/**
- * Walk up from el to find its ancestor that is a direct child of container.
- * Returns el itself if it is already a direct child. Returns undefined if
- * el is not a descendant of container.
- */
-const findDirectChildAncestor = (
-  el: HTMLElement,
-  container: HTMLElement,
-): HTMLElement | undefined => {
-  let current: HTMLElement | null = el;
-  while (current && current.parentElement !== container) {
-    current = current.parentElement;
-  }
-  return current ?? undefined;
-};
-
-/** Whether an element participates in normal/flex layout flow. */
-const isInFlow = (el: HTMLElement): boolean => {
-  const style = window.getComputedStyle(el);
-  if (style.display === "none") return false;
-  if (style.position === "absolute" || style.position === "fixed") return false;
-  return true;
-};
-
-/** Whether a child should be kept visible (pinned via attribute or option). */
 const isKeptChild = (
   child: HTMLElement,
-  keepVisibleEl?: HTMLElement,
+  keepVisibleEl: HTMLElement | undefined,
 ): boolean =>
   child.hasAttribute(KEEP_ATTR) ||
   (!!keepVisibleEl &&
-    (child === keepVisibleEl || child.contains(keepVisibleEl)));
+    (child === keepVisibleEl || child.contains(keepVisibleEl)))
 
 // ── Visibility ───────────────────────────────────────────────────────
 
-const dispatchUpdate = (el: HTMLElement, detail: FitChildrenEventDetail) => {
-  el.dispatchEvent(
-    new CustomEvent<FitChildrenEventDetail>(EVENT_NAME, { detail }),
-  );
-};
+const dispatchUpdate = <T>(
+  element: HTMLElement,
+  detail: FitChildrenEventDetail<T>,
+): void => {
+  element.dispatchEvent(new CustomEvent(EVENT_NAME, { detail }))
+}
 
-const showChild = (child: HTMLElement) => {
-  if (child.style.display === "none" || child.hasAttribute(HIDDEN_ATTR)) {
-    child.style.removeProperty("display");
-    child.removeAttribute(HIDDEN_ATTR);
+const showChild = (child: HTMLElement): void => {
+  if (child.style.display === 'none' || child.hasAttribute(HIDDEN_ATTR)) {
+    child.style.removeProperty('display')
+    child.removeAttribute(HIDDEN_ATTR)
   }
-};
+}
 
-const hideChild = (child: HTMLElement) => {
-  if (child.style.display !== "none") {
-    child.style.setProperty("display", "none", "important");
-    child.setAttribute(HIDDEN_ATTR, "true");
+const hideChild = (child: HTMLElement): void => {
+  if (child.style.display !== 'none') {
+    child.style.setProperty('display', 'none', 'important')
+    child.setAttribute(HIDDEN_ATTR, 'true')
   }
-};
+}
 
-// ── Overflow calculation ─────────────────────────────────────────────
+// ── Ghost DOM ────────────────────────────────────────────────────────
 
-const calculateOverflow = (targetElement: HTMLElement | undefined) => {
-  if (!targetElement) return;
-
-  const state = stateMap.get(targetElement);
-  if (!state) return;
-
-  const {
-    data,
-    parentContainer,
-    targetElement: el,
-    offsetNeededInPx,
-    sortBySize,
-    rowCount,
-    keepVisibleEl,
-    gapFromOption,
-  } = state;
-
-  if (!el || !parentContainer) return;
-
-  let availableSpaceForChildren = getContentWidth(parentContainer);
-
-  if (parentContainer !== el) {
-    const elAncestor = findDirectChildAncestor(el, parentContainer);
-
-    if (elAncestor) {
-      // Subtract widths of all siblings within the container (overflow button, action buttons, etc.)
-      const parentStyle = window.getComputedStyle(parentContainer);
-      const parentGap = parentStyle.columnGap
-        ? parsePx(parentStyle.columnGap)
-        : parsePx(parentStyle.gap) || 0;
-
-      for (const sibling of Array.from(parentContainer.children)) {
-        if (sibling !== elAncestor && isInFlow(sibling as HTMLElement)) {
-          availableSpaceForChildren -=
-            getOuterWidth(sibling as HTMLElement) + parentGap;
-        }
-      }
-
-      // Subtract overhead from el and any wrappers between el and parentContainer
-      let current: HTMLElement | null = el;
-      while (current && current !== parentContainer) {
-        availableSpaceForChildren -= getHorizontalOverhead(
-          window.getComputedStyle(current),
-        );
-        current = current.parentElement;
-      }
-    }
+const _renderGhost = (state: FitChildrenState): void => {
+  if (!state.targetElement) {
+    return
   }
 
-  const immediateChildren = Array.from(el.children) as HTMLElement[];
-
-  // Temporarily reveal hidden children so measurements are accurate
-  const previouslyHidden = el.querySelectorAll(`[${HIDDEN_ATTR}]`);
-  previouslyHidden.forEach((node) => {
-    const child = node as HTMLElement;
-    child.style.display = "";
-    child.removeAttribute(HIDDEN_ATTR);
-  });
-
-  // Measure gap from actual DOM positions, not CSS
-  const elStyle = window.getComputedStyle(el);
-  const gapPx = measureGap(immediateChildren, elStyle, gapFromOption);
-
-  // Measure all children (accounts for overflow: visible via scrollWidth)
-  const childWidths = immediateChildren.map(getOuterWidth);
-
-  const totalChildWidth = childWidths.reduce(
-    (sum: number, w: number, i: number) => {
-      return sum + w + (i > 0 ? gapPx : 0);
-    },
-    0,
-  );
-
-  // If all children fit without offset, show everything (no "+N" badge needed)
-  if (totalChildWidth <= availableSpaceForChildren) {
-    immediateChildren.forEach(showChild);
-    dispatchUpdate(el, {
-      hiddenChildren: [],
-      hiddenChildrenCount: 0,
-      hiddenData: data ? [] : undefined,
-      hiddenIndices: [],
-      isOverflowing: false,
-    });
-    return;
+  if (!state.ghostElement) {
+    const ghost = document.createElement('div')
+    Object.assign(ghost.style, {
+      display: 'flex',
+      flexWrap: 'nowrap',
+      left: '0px',
+      overflow: 'hidden',
+      pointerEvents: 'none',
+      position: 'fixed',
+      top: '-9999px',
+      visibility: 'hidden',
+      zIndex: '-9999',
+    })
+    document.body.appendChild(ghost)
+    state.ghostElement = ghost
   }
 
-  // Build candidate indices sorted by priority: kept first, then by size/DOM order
-  const candidates = Array.from(immediateChildren.keys()).sort((a, b) => {
-    const aKeep = isKeptChild(immediateChildren[a], keepVisibleEl);
-    const bKeep = isKeptChild(immediateChildren[b], keepVisibleEl);
+  const targetStyle = window.getComputedStyle(state.targetElement)
+  state.ghostElement.style.gap =
+    state.gapFromOption !== undefined
+      ? `${state.gapFromOption}px`
+      : targetStyle.gap
+  state.ghostElement.style.alignItems = targetStyle.alignItems
 
-    if (aKeep && !bKeep) return -1;
-    if (!aKeep && bKeep) return 1;
+  state.realIndexToGhostChild = new Map()
+  state.ghostObservableChildren = []
 
-    if (sortBySize) {
-      return childWidths[a] - childWidths[b];
-    }
-    return a - b;
-  });
+  const realChildren = Array.from(state.targetElement.children) as HTMLElement[]
+  const fragment = document.createDocumentFragment()
+  const keptClones: HTMLElement[] = []
 
-  // Pack children row-by-row; offset is only reserved on the last row
-  const hiddenChildren: HTMLElement[] = [];
-  const hiddenIndices: number[] = [];
-  const visibleIndices = new Set<number>();
-  const strictWidthLastRow = availableSpaceForChildren - offsetNeededInPx;
-  let usedWidth = 0;
-  let currentLine = 1;
+  // Single pass: kept children go first in the ghost (reserve natural space), IO observes the rest
+  realChildren.forEach((child, realIndex) => {
+    const clone = child.cloneNode(true) as HTMLElement
+    clone.style.removeProperty('display')
+    clone.removeAttribute(HIDDEN_ATTR)
 
-  for (const index of candidates) {
-    const itemWidth = childWidths[index];
-    const child = immediateChildren[index];
+    // Stamp measured width so environments without layout (e.g. jsdom) can
+    // still determine overflow via a mock IntersectionObserver.
+    const rect = child.getBoundingClientRect()
+    const measured = Math.max(rect.width, child.scrollWidth)
+    clone.dataset.vFitW = String(Math.round(measured))
 
-    let gap = usedWidth === 0 ? 0 : gapPx;
-    let limit =
-      currentLine === rowCount
-        ? strictWidthLastRow
-        : availableSpaceForChildren;
-
-    // If it doesn't fit current line, try advancing to the next line
-    if (usedWidth + gap + itemWidth > limit && currentLine < rowCount) {
-      currentLine++;
-      usedWidth = 0;
-      gap = 0;
-      limit =
-        currentLine === rowCount
-          ? strictWidthLastRow
-          : availableSpaceForChildren;
-    }
-
-    if (usedWidth + gap + itemWidth <= limit) {
-      usedWidth += gap + itemWidth;
-      visibleIndices.add(index);
+    if (isKeptChild(child, state.keepVisibleEl)) {
+      clone.style.flexShrink = '0'
+      keptClones.push(clone)
     } else {
-      // Does not fit on any available line
-      if (isKeptChild(child, keepVisibleEl)) {
-        usedWidth += gap + itemWidth;
-        visibleIndices.add(index);
-      } else if (!sortBySize) {
-        break;
-      }
+      state.realIndexToGhostChild.set(realIndex, clone)
+      state.ghostObservableChildren.push(clone)
     }
+  })
+
+  keptClones.forEach((clone) => fragment.appendChild(clone))
+  state.ghostObservableChildren.forEach((clone) => fragment.appendChild(clone))
+  state.ghostElement.replaceChildren(fragment)
+}
+
+const _updateGhostWidth = (state: FitChildrenState): void => {
+  if (!state.ghostElement || !state.widthRestrictingContainer) {
+    return
   }
 
-  immediateChildren.forEach((child, i) => {
-    if (visibleIndices.has(i)) {
-      showChild(child);
-    } else {
-      hideChild(child);
-      hiddenChildren.push(child);
-      hiddenIndices.push(i);
-    }
-  });
+  const containerWidth = getContentWidth(state.widthRestrictingContainer)
 
-  const isOverflowing = hiddenChildren.length > 0;
+  // Smart fit: if all children fit without offset, no "+N" badge is needed
+  const allClones = Array.from(state.ghostElement.children) as HTMLElement[]
+  const gapStr = state.ghostElement.style.gap || '0'
+  const gapParts = gapStr.trim().split(/\s+/)
+  const gapPx = parseFloat(gapParts.length > 1 ? gapParts[1] : gapParts[0]) || 0
+  let totalWidth = 0
+  allClones.forEach((clone, i) => {
+    totalWidth += parseFloat(clone.dataset.vFitW || '0') + (i > 0 ? gapPx : 0)
+  })
+
+  const width =
+    totalWidth <= containerWidth
+      ? containerWidth
+      : containerWidth - state.offsetNeededInPx
+
+  state.ghostElement.style.width = `${width}px`
+}
+
+// ── IntersectionObserver-based visibility ─────────────────────────────
+const applyVisibility = (state: FitChildrenState): void => {
+  const { targetElement, ghostElement, data, keepVisibleEl } = state
+  if (!targetElement || !ghostElement) {
+    return
+  }
+
+  const realChildren = Array.from(targetElement.children) as HTMLElement[]
+
+  const hiddenChildren: HTMLElement[] = []
+  const hiddenIndices: number[] = []
+
+  realChildren.forEach((child, realIndex) => {
+    if (isKeptChild(child, keepVisibleEl)) {
+      showChild(child)
+      return
+    }
+
+    const ghostChild = state.realIndexToGhostChild.get(realIndex)
+    if (!ghostChild) {
+      showChild(child)
+      return
+    }
+
+    const isVisible = state.visibilityMap.get(ghostChild)
+
+    if (isVisible === false) {
+      hideChild(child)
+      hiddenChildren.push(child)
+      hiddenIndices.push(realIndex)
+    } else {
+      showChild(child)
+    }
+  })
+
   const hiddenData = data
-    ? hiddenIndices.filter((i) => i < data.length).map((i) => data[i])
-    : undefined;
+    ? hiddenIndices
+        .filter((index) => index < data.length)
+        .map((index) => data[index])
+    : undefined
 
-  dispatchUpdate(el, {
+  dispatchUpdate(targetElement, {
     hiddenChildren,
     hiddenChildrenCount: hiddenChildren.length,
     hiddenData,
     hiddenIndices,
-    isOverflowing,
-  });
-};
+    isOverflowing: hiddenChildren.length > 0,
+  })
+}
+
+const _observeGhostChildren = (state: FitChildrenState): void => {
+  if (!state.ghostElement || !state.targetElement) {
+    return
+  }
+
+  state.intersectionObserver?.disconnect()
+  state.visibilityMap = new WeakMap()
+
+  if (state.ghostObservableChildren.length === 0) {
+    applyVisibility(state)
+    return
+  }
+
+  const intersectionObserver = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        state.visibilityMap.set(entry.target, entry.intersectionRatio >= 1.0)
+      })
+      applyVisibility(state)
+    },
+    {
+      root: state.ghostElement,
+      rootMargin: '0px',
+      threshold: 1.0,
+    },
+  )
+
+  state.ghostObservableChildren.forEach((child) =>
+    intersectionObserver.observe(child),
+  )
+  state.intersectionObserver = intersectionObserver
+}
 
 // ── Scheduling ───────────────────────────────────────────────────────
 
-const scheduleOverflowCalculation = (state: FitChildrenState) => {
-  if (state.pendingCalc || !state.targetElement) return;
+const scheduleRecalculation = (state: FitChildrenState): void => {
+  if (state.pendingCalc || !state.targetElement) {
+    return
+  }
+  state.pendingCalc = true
+  requestAnimationFrame(() => {
+    _renderGhost(state)
+    _updateGhostWidth(state)
+    _observeGhostChildren(state)
+    state.pendingCalc = false
+  })
+}
 
-  state.pendingCalc = true;
-  queueMicrotask(() => {
-    state.pendingCalc = false;
-    calculateOverflow(state.targetElement);
-  });
-};
+// ── Keep-visible observation ─────────────────────────────────────────
+
+const observeKeepVisible = (state: FitChildrenState): void => {
+  state.keepVisibleResizeObserver?.disconnect()
+
+  if (!state.keepVisibleEl) {
+    return
+  }
+
+  const resizeObserver = new ResizeObserver(() => scheduleRecalculation(state))
+  resizeObserver.observe(state.keepVisibleEl)
+  state.keepVisibleResizeObserver = resizeObserver
+}
+
+// ── Container observation ────────────────────────────────────────────
+
+const onContainerResize = (state: FitChildrenState): void => {
+  scheduleRecalculation(state)
+}
+
+const observeContainer = (state: FitChildrenState): void => {
+  state.resizeObserver?.disconnect()
+
+  if (!state.widthRestrictingContainer) {
+    return
+  }
+
+  const resizeObserver = new ResizeObserver(() => onContainerResize(state))
+
+  const parents: HTMLElement[] = []
+  const collectParents = (element: HTMLElement | null): void => {
+    if (!element || element === state.widthRestrictingContainer) {
+      return
+    }
+    parents.push(element)
+    collectParents(element.parentElement)
+  }
+  collectParents(state.targetElement ?? null)
+
+  resizeObserver.observe(state.widthRestrictingContainer)
+  parents.forEach((parent) => resizeObserver.observe(parent))
+
+  state.resizeObserver = resizeObserver
+}
 
 // ── Directive lifecycle ──────────────────────────────────────────────
 
-function handleFitChildren(
-  wrapperEl: HTMLElement,
-  binding: DirectiveBinding<FitChildrenOptions>,
-) {
-  let state = stateMap.get(wrapperEl);
+const handleFitChildren = (
+  wrapperElement: HTMLElement,
+  binding: { value?: FitChildrenOptions },
+): void => {
+  let state = stateMap.get(wrapperElement)
 
   if (!state) {
     state = {
-      childResizeObserver: undefined,
       data: binding.value?.data,
       gapFromOption: binding.value?.gap,
+      ghostElement: undefined,
+      ghostObservableChildren: [],
+      intersectionObserver: undefined,
       keepVisibleEl: binding.value?.keepVisibleEl,
+      keepVisibleResizeObserver: undefined,
       mutationObserver: undefined,
       offsetNeededInPx: Math.max(
         binding.value?.offsetNeededInPx ?? DEFAULT_OFFSET_PX,
         0,
       ),
-      parentContainer: undefined,
       pendingCalc: false,
+      realIndexToGhostChild: new Map(),
       resizeObserver: undefined,
-      rowCount: binding.value?.rowCount ?? 1,
-      sortBySize: binding.value?.sortBySize ?? false,
       targetElement: undefined,
-    };
-    stateMap.set(wrapperEl, state);
+      visibilityMap: new WeakMap(),
+      widthRestrictingContainer: undefined,
+    }
+    stateMap.set(wrapperElement, state)
   } else {
-    let needsUpdate = false;
+    let needsUpdate = false
+
     if (binding.value?.data !== state.data) {
-      state.data = binding.value?.data;
-      needsUpdate = true;
+      state.data = binding.value?.data
+      needsUpdate = true
     }
     if (binding.value?.gap !== state.gapFromOption) {
-      state.gapFromOption = binding.value?.gap;
-      needsUpdate = true;
+      state.gapFromOption = binding.value?.gap
+      needsUpdate = true
     }
     if (
       binding.value?.offsetNeededInPx !== undefined &&
       binding.value.offsetNeededInPx !== state.offsetNeededInPx
     ) {
-      state.offsetNeededInPx = Math.max(binding.value.offsetNeededInPx, 0);
-      needsUpdate = true;
-    }
-    if (
-      binding.value?.sortBySize !== undefined &&
-      binding.value.sortBySize !== state.sortBySize
-    ) {
-      state.sortBySize = binding.value.sortBySize;
-      needsUpdate = true;
-    }
-    if (
-      binding.value?.rowCount !== undefined &&
-      binding.value.rowCount !== state.rowCount
-    ) {
-      state.rowCount = Math.max(binding.value.rowCount, 1);
-      needsUpdate = true;
+      state.offsetNeededInPx = Math.max(binding.value.offsetNeededInPx, 0)
+      needsUpdate = true
     }
     if (binding.value?.keepVisibleEl !== state.keepVisibleEl) {
-      state.keepVisibleEl = binding.value?.keepVisibleEl;
-      needsUpdate = true;
+      state.keepVisibleEl = binding.value?.keepVisibleEl
+      observeKeepVisible(state)
+      needsUpdate = true
     }
 
     if (needsUpdate) {
-      scheduleOverflowCalculation(state);
+      scheduleRecalculation(state)
     }
   }
 
-  if (!state.targetElement && wrapperEl) {
-    state.targetElement = wrapperEl;
-
-    if (!state.childResizeObserver) {
-      const s = state;
-      const childResizeObserver = new ResizeObserver(() =>
-        scheduleOverflowCalculation(s),
-      );
-
-      Array.from(state.targetElement.children).forEach((child) =>
-        childResizeObserver.observe(child),
-      );
-      state.childResizeObserver = childResizeObserver;
-    }
-
-    if (!state.mutationObserver) {
-      const s = state;
-      const mutationObserver = new MutationObserver((mutations) => {
-        mutations.forEach((m) => {
-          m.addedNodes.forEach((node) => {
-            if (node instanceof Element) {
-              s.childResizeObserver?.observe(node);
-            }
-          });
-
-          m.removedNodes.forEach((node) => {
-            if (node instanceof Element) {
-              s.childResizeObserver?.unobserve(node);
-            }
-          });
-        });
-        scheduleOverflowCalculation(s);
-      });
-      mutationObserver.observe(state.targetElement, {
-        characterData: true,
-        childList: true,
-        subtree: true,
-      });
-      state.mutationObserver = mutationObserver;
-    }
+  if (!state.targetElement && wrapperElement) {
+    state.targetElement = wrapperElement
   }
 
-  // Use provided container or fallback to the directive's element
-  const container = binding.value?.widthRestrictingContainer || wrapperEl;
-  if (!state.parentContainer || state.parentContainer !== container) {
-    if (state.resizeObserver) {
-      state.resizeObserver.disconnect();
-      state.resizeObserver = undefined;
-    }
-
-    state.parentContainer = container;
-
-    if (!state.resizeObserver) {
-      const s = state;
-      const resizeObserver = new ResizeObserver(() =>
-        scheduleOverflowCalculation(s),
-      );
-      resizeObserver.observe(container);
-      state.resizeObserver = resizeObserver;
-    }
-
-    // When parentContainer !== el, observe siblings for size changes
-    // so we recalculate when e.g. an overflow button text changes width
-    if (container !== wrapperEl) {
-      // Clean up previous sibling observers
-      state.siblingResizeObserver?.disconnect();
-      state.parentMutationObserver?.disconnect();
-
-      const s = state;
-      const elAncestor = findDirectChildAncestor(wrapperEl, container);
-
-      if (elAncestor) {
-        // Observe existing siblings for resize
-        const siblingObserver = new ResizeObserver(() =>
-          scheduleOverflowCalculation(s),
-        );
-        for (const sibling of Array.from(container.children)) {
-          if (sibling !== elAncestor && isInFlow(sibling as HTMLElement)) {
-            siblingObserver.observe(sibling);
-          }
-        }
-        state.siblingResizeObserver = siblingObserver;
-
-        // Watch parentContainer for sibling additions/removals
-        const parentMutObs = new MutationObserver((mutations) => {
-          for (const m of mutations) {
-            m.addedNodes.forEach((node) => {
-              if (node instanceof Element && node !== elAncestor) {
-                siblingObserver.observe(node);
-              }
-            });
-            m.removedNodes.forEach((node) => {
-              if (node instanceof Element) {
-                siblingObserver.unobserve(node);
-              }
-            });
-          }
-          scheduleOverflowCalculation(s);
-        });
-        parentMutObs.observe(container, { childList: true });
-        state.parentMutationObserver = parentMutObs;
-      }
-    }
+  if (!state.mutationObserver && state.targetElement) {
+    const mutationObserver = new MutationObserver(() =>
+      scheduleRecalculation(state!),
+    )
+    mutationObserver.observe(state.targetElement, { childList: true })
+    state.mutationObserver = mutationObserver
   }
 
-  // Ensure flex-wrap is enabled if multiple rows are allowed
-  if (state.rowCount > 1 && wrapperEl.style.flexWrap !== "wrap") {
-    state.originalFlexWrap = wrapperEl.style.flexWrap;
-    wrapperEl.style.setProperty("flex-wrap", "wrap");
+  if (!state.ghostElement) {
+    _renderGhost(state)
+  }
+
+  const container =
+    (binding.value?.widthRestrictingContainer as HTMLElement | undefined) ??
+    wrapperElement
+
+  if (
+    !state.widthRestrictingContainer ||
+    state.widthRestrictingContainer !== container
+  ) {
+    state.widthRestrictingContainer = container
+    observeContainer(state)
+    observeKeepVisible(state)
+    scheduleRecalculation(state)
   }
 }
 
-export const vFitChildren: Directive = {
+export const vFitChildren: Directive<
+  HTMLElement,
+  FitChildrenOptions | undefined
+> = {
   beforeMount: handleFitChildren,
-  beforeUnmount(el: HTMLElement) {
-    const state = stateMap.get(el);
-    if (!state) return;
-
-    if (state.mutationObserver) {
-      state.mutationObserver.disconnect();
+  beforeUnmount(element: HTMLElement) {
+    const state = stateMap.get(element)
+    if (!state) {
+      return
     }
 
-    if (state.resizeObserver) {
-      state.resizeObserver.disconnect();
-    }
+    state.targetElement = undefined
 
-    if (state.childResizeObserver) {
-      state.childResizeObserver.disconnect();
-    }
+    state.resizeObserver?.disconnect()
+    state.intersectionObserver?.disconnect()
+    state.keepVisibleResizeObserver?.disconnect()
+    state.mutationObserver?.disconnect()
 
-    if (state.siblingResizeObserver) {
-      state.siblingResizeObserver.disconnect();
-    }
+    state.ghostElement?.remove()
 
-    if (state.parentMutationObserver) {
-      state.parentMutationObserver.disconnect();
-    }
+    element
+      .querySelectorAll(`[${HIDDEN_ATTR}]`)
+      .forEach((node) => showChild(node as HTMLElement))
 
-    // Restore hidden children so they're not stuck with display:none
-    const hiddenChildren = el.querySelectorAll(`[${HIDDEN_ATTR}]`);
-    hiddenChildren.forEach((node) => showChild(node as HTMLElement));
-
-    // Restore original flex-wrap if we set it
-    if (state.originalFlexWrap !== undefined) {
-      if (state.originalFlexWrap) {
-        el.style.setProperty("flex-wrap", state.originalFlexWrap);
-      } else {
-        el.style.removeProperty("flex-wrap");
-      }
-    }
-
-    stateMap.delete(el);
+    stateMap.delete(element)
   },
   updated: handleFitChildren,
-};
+}
