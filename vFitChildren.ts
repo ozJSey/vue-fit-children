@@ -1,5 +1,6 @@
 import { type Directive } from 'vue';
 
+// Based on https://www.npmjs.com/package/v-fit-children
 export type FitChildrenOptions<T = unknown> = {
   data?: T[]
   gap?: number
@@ -35,6 +36,7 @@ type FitChildrenState<T = unknown> = {
 }
 
 const DEFAULT_OFFSET_PX = 50
+const DECORATIVE_ATTR = 'data-v-fit-decorative'
 const HIDDEN_ATTR = 'data-v-fit-hidden'
 const KEEP_ATTR = 'data-v-fit-keep'
 const EVENT_NAME = 'fit-children-updated'
@@ -61,6 +63,13 @@ const isKeptChild = (
   child.hasAttribute(KEEP_ATTR) ||
   (!!keepVisibleEl &&
     (child === keepVisibleEl || child.contains(keepVisibleEl)))
+
+const isDataChild = (
+  child: HTMLElement,
+  keepVisibleEl: HTMLElement | undefined,
+): boolean =>
+  !child.hasAttribute(DECORATIVE_ATTR) &&
+  !(keepVisibleEl && (child === keepVisibleEl || child.contains(keepVisibleEl)))
 
 // ── Visibility ───────────────────────────────────────────────────────
 
@@ -155,8 +164,6 @@ const _updateGhostWidth = (state: FitChildrenState): void => {
   }
 
   const containerWidth = getContentWidth(state.widthRestrictingContainer)
-
-  // Smart fit: if all children fit without offset, no "+N" badge is needed
   const allClones = Array.from(state.ghostElement.children) as HTMLElement[]
   const gapStr = state.ghostElement.style.gap || '0'
   const gapParts = gapStr.trim().split(/\s+/)
@@ -185,11 +192,23 @@ const applyVisibility = (state: FitChildrenState): void => {
 
   const hiddenChildren: HTMLElement[] = []
   const hiddenIndices: number[] = []
+  const hiddenDataIndices: number[] = []
+  let dataIndex = 0
 
   realChildren.forEach((child, realIndex) => {
+    const countsAsData = isDataChild(child, keepVisibleEl)
+
     if (isKeptChild(child, keepVisibleEl)) {
       showChild(child)
+      if (countsAsData) {
+        dataIndex++
+      }
       return
+    }
+
+    const currentDataIndex = countsAsData ? dataIndex : -1
+    if (countsAsData) {
+      dataIndex++
     }
 
     const ghostChild = state.realIndexToGhostChild.get(realIndex)
@@ -204,13 +223,16 @@ const applyVisibility = (state: FitChildrenState): void => {
       hideChild(child)
       hiddenChildren.push(child)
       hiddenIndices.push(realIndex)
+      if (currentDataIndex >= 0) {
+        hiddenDataIndices.push(currentDataIndex)
+      }
     } else {
       showChild(child)
     }
   })
 
   const hiddenData = data
-    ? hiddenIndices
+    ? hiddenDataIndices
         .filter((index) => index < data.length)
         .map((index) => data[index])
     : undefined
