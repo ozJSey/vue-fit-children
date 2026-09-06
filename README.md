@@ -15,17 +15,17 @@ A Vue 3 directive that automatically hides child elements that don't fit within 
 - Accounts for content overflow (`overflow: visible`) via `scrollWidth`
 - Pin specific children so they are never hidden (`keepVisibleEl` or `data-v-fit-keep`)
 - Pass your `v-for` array via `data` to receive typed `hiddenData` and `hiddenIndices`
-- Responds to container resizes via `ResizeObserver`
-- Monitors individual child size changes via `ResizeObserver`
-- Detects child additions/removals via `MutationObserver`
-- Uses a ghost DOM + `IntersectionObserver` for accurate overflow detection
-- Batches recalculations with `requestAnimationFrame` for performance
+- Measures the real children in place — no clones, so margins, gaps and inherited styles are whatever the browser actually laid out
+- Watches the container, the host, its parent, every child **and every sibling** — a "+N" badge growing beside the row changes none of the first four
+- Reflects state as `data-v-fit-state="fits" | "overflowing"` for CSS-only styling
+- Composes with `v-show` and `<Transition>`: hiding never touches `style.display`
+- Runs before paint — no `requestAnimationFrame`, so there is no frame where the previous state shows clipped
 - Written in TypeScript — ships with full type declarations
 
 ## Install
 
 ```bash
-npm install v-fit-children
+npm install @ozjsey/v-fit-children
 ```
 
 Vue 3 is a peer dependency — it won't be bundled.
@@ -38,7 +38,7 @@ Import the directive in any `<script setup>` component. Vue auto-registers it be
 
 ```vue
 <script setup lang="ts">
-import { vFitChildren } from "v-fit-children";
+import { vFitChildren } from "@ozjsey/v-fit-children";
 </script>
 ```
 
@@ -48,7 +48,7 @@ Register once in your entry file so every component can use `v-fit-children` wit
 
 ```ts
 import { createApp } from "vue";
-import { vFitChildren } from "v-fit-children";
+import { vFitChildren } from "@ozjsey/v-fit-children";
 import App from "./App.vue";
 
 const app = createApp(App);
@@ -61,7 +61,7 @@ app.mount("#app");
 ```vue
 <script setup lang="ts">
 import { ref } from "vue";
-import { vFitChildren } from "v-fit-children";
+import { vFitChildren } from "@ozjsey/v-fit-children";
 
 const containerRef = ref<HTMLElement>();
 const hiddenCount = ref(0);
@@ -112,8 +112,8 @@ Options are reactive — changing them via the directive value triggers a recalc
 The package ships with full type declarations. Exported types:
 
 ```ts
-import { vFitChildren } from "v-fit-children";
-import type { FitChildrenOptions, FitChildrenEventDetail } from "v-fit-children";
+import { vFitChildren } from "@ozjsey/v-fit-children";
+import type { FitChildrenOptions, FitChildrenEventDetail } from "@ozjsey/v-fit-children";
 ```
 
 ### `FitChildrenOptions`
@@ -193,7 +193,7 @@ Pass a ref to the element (or a descendant of a child) that should stay visible:
 ```vue
 <script setup lang="ts">
 import { ref } from "vue";
-import { vFitChildren } from "v-fit-children";
+import { vFitChildren } from "@ozjsey/v-fit-children";
 
 const containerRef = ref<HTMLElement>();
 const inputRef = ref<HTMLElement>();
@@ -235,7 +235,7 @@ Pass your `v-for` array via the `data` option to receive the corresponding data 
 ```vue
 <script setup lang="ts">
 import { ref } from "vue";
-import { vFitChildren, type FitChildrenEventDetail } from "v-fit-children";
+import { vFitChildren, type FitChildrenEventDetail } from "@ozjsey/v-fit-children";
 
 interface Tag {
   id: number;
@@ -294,25 +294,97 @@ Set `offsetNeededInPx: 0` since the badge lives outside the directive element.
 
 ## How it works
 
-1. On mount, the directive sets up `ResizeObserver` on the container (and any parent elements between the wrapper and container), plus a `MutationObserver` for child list changes.
-2. When any observer fires, a recalculation is scheduled via `requestAnimationFrame` (deduplicated — only one pending at a time).
-3. A hidden **ghost element** (`display: flex; overflow: hidden`) is appended to `document.body`. Real children are cloned into it — kept children (`keepVisibleEl` / `data-v-fit-keep`) go first with `flex-shrink: 0`, then the rest in DOM order.
-4. The ghost's width is set to `containerWidth - offsetNeededInPx`. If all children fit without the offset (smart fit), the full container width is used instead.
-5. An `IntersectionObserver` (root = ghost, threshold = 1.0) determines which clones are fully visible vs. clipped.
-6. Visibility results are mapped back to the real children: visible clones → show, clipped clones → hide.
-7. A `fit-children-updated` event is dispatched with hidden children, indices, optional data mapping, and overflow status.
-8. On unmount, all observers are disconnected, the ghost is removed, hidden children are restored, and internal state is cleaned up.
+Three steps per pass — measure, decide, apply — with the measurement and the write kept strictly apart so a second, disagreeing measurement cannot creep in.
+
+1. **Measure.** Every child the directive hid is shown again first: a `display: none` child measures zero, and re-measuring it in place is the whole reason no ghost element is needed. One `getBoundingClientRect` loop then records each child's width, the space in front of it, and its trailing margin. Spacing is *measured* rather than computed, so CSS `gap`, margins and inline whitespace all arrive as one number that is true by construction.
+2. **Decide.** Pure arithmetic, no DOM. If the total fits, everything stays and no offset is reserved — a badge you do not need should not cost you width. Otherwise the budget is `available − offsetNeededInPx`, pinned children are reserved up front, and the remaining children are admitted in DOM order until one does not fit.
+3. **Apply.** Hidden children get `data-v-fit-hidden`, the host gets `data-v-fit-state`, and `fit-children-updated` fires — but only when the outcome actually changed, since hiding a child is itself a resize.
+
+Available width is `min(host, container)`. The host's own width is safe to read because nothing here ever writes it.
+
+**What triggers a pass:** one `ResizeObserver` covering the container, the host, its parent, every child and every sibling; Vue's own `updated` hook for children it rendered; and a `MutationObserver` for DOM injected outside Vue. There is no `requestAnimationFrame` — observer callbacks and `updated` both already run after layout and before paint, which is what removes the frame of clipped content.
+
+**Shrinking is free.** Every child consulted when the row narrows is currently visible, so its recorded width is live and no DOM is read at all. Growing re-measures, because a hidden child's recorded width is the last one taken while it was visible.
+
+## Hiding, and why it is not `display: none`
+
+Children are hidden with the `data-v-fit-hidden` attribute plus a single rule the package injects once per document (or shadow root):
+
+```css
+[data-v-fit-hidden] { display: none !important; }
+```
+
+`v-show`, Vue's style-prop patcher and `<Transition>` all read and write `el.style.display` between them. A fourth writer means the last one wins — a `v-show` child flipping to `true` would silently un-hide a child that does not fit. Staying off that property lets the two compose, and makes "the consumer hid this" an exact test rather than a guess about who set the inline style.
+
+> **Strict CSP.** A `style-src` without `'unsafe-inline'` blocks the injected sheet, and hiding then stops working **silently** — no error, children simply overflow. Ship the rule above in your own CSS and the injection becomes a harmless no-op.
+
+## Attributes
+
+| Attribute | On | Meaning |
+|---|---|---|
+| `data-v-fit-state` | the host | `"fits"` or `"overflowing"` — style overflow with CSS alone, no event handler |
+| `data-v-fit-hidden` | a child | Set by the directive on children it hid. Do not set it yourself |
+| `data-v-fit-keep` | a child | Never hide this child, wherever it sits |
+| `data-v-fit-decorative` | a child | Hide it like any other, but consume no `data` index — for separators |
 
 ## Known limitations
 
-- The directive hides children using `display: none !important`. If a child has critical `display` styles set inline, they will be overridden while hidden.
-- `keepVisibleEl` accepts a single element. To pin multiple children, use `data-v-fit-keep` on each. Kept elements are never hidden, so if multiple pinned children exceed the container width, they will overflow.
+- **Single row.** The directive assumes one non-wrapping row. A `flex-wrap: wrap` host is not supported.
+- **The host must not be sized by the children it is measuring.** `flex: 1`, `width: 100%` or block-level all work, and so does shrink-to-fit. What cannot work is a *container* whose own width depends on the host's.
+- **A consumer-hidden child is detected by inline `display: none`** (what `v-show` sets). Hiding a child with a CSS class instead is not detected.
+- **`keepVisibleEl` accepts a single element.** Use `data-v-fit-keep` for multiple. Pinned children are never hidden, so if they alone exceed the width they overflow rather than vanish — the honest failure for something the user is interacting with.
+- **SSR.** No markup is added, so hydration cannot mismatch, but the server sends every child visible and the first client paint shows them all until `mounted` runs.
+- **A "+N" badge whose *width* depends on what is hidden** makes the directive's output its own input. That is handled — runs which do not survive being chosen are remembered and not re-entered — but such a layout can settle below the theoretical maximum. Reserving constant space for the badge (`offsetNeededInPx`, or padding on the host) avoids the loop entirely.
 
 ## Browser support
 
 Requires browsers that support `ResizeObserver`, `MutationObserver`, and `getBoundingClientRect`. All modern browsers (Chrome, Firefox, Safari, Edge) are supported.
 
 ## Changelog
+
+### 2.2.0
+
+**First release under the `@ozjsey` scope.** Install `@ozjsey/v-fit-children`; the directive, the
+exports and the attributes are unchanged. The unscoped `v-fit-children` package stops here.
+
+> **Not a drop-in upgrade from `v-fit-children@2.1.0`.** The version line is continuous, but the
+> hide mechanism changed and the package now injects a stylesheet. Read the two bullets below before
+> upgrading.
+
+**Breaking in practice (though the API is unchanged):**
+
+- **Hiding moved from inline `display: none !important` to `data-v-fit-hidden` + an injected rule.**
+  Any CSS or transition keyed on the inline style needs updating, and a strict `style-src` CSP now
+  disables hiding silently — see "Hiding, and why it is not `display: none`".
+- **`gap` is a floor over measured spacing, not a replacement.** Spacing is measured from the real
+  layout, so margins are already counted; the option can now only reserve *more* room, never less.
+
+**Fixed:**
+
+- Children that were hidden could no longer be measured, so the running total collapsed and the
+  "everything fits" branch handed the row its full width — admitting more children than fit.
+- The directive fought `v-show`: it cleared any inline `display: none` it found, including one it
+  had not set.
+- A sibling resizing was invisible. A "+N" badge growing beside a shrink-to-fit host changes neither
+  the host's box nor the parent's, so nothing fired and the row kept a stale answer.
+- A shrink-to-fit host could collapse to zero children, its post-hide width feeding back as the next
+  budget.
+- A badge labelled from the hidden set could cycle forever between runs, showing clipped content on
+  alternate frames.
+- `gap` charged a leading gap to the first child, billing an n-child row for n gaps instead of n−1.
+- `isOverflowing` reported `fits` for a row of entirely pinned children that was visibly clipped.
+- Swapping the `data` array with an unchanged fit left `hiddenData` stale.
+- A negative available width produced an invalid declaration that disabled hiding entirely.
+
+**Added:**
+
+- `data-v-fit-state="fits" | "overflowing"` on the host, for CSS-only styling.
+- Per-child and per-sibling `ResizeObserver` coverage.
+- `FitChildrenFitState` exported type.
+
+**Internal:** the ghost element, its clones, the `IntersectionObserver` and the
+`requestAnimationFrame` batching are all gone; the source is split into single-purpose modules under
+`src/` (see `ARCHITECTURE.md`).
 
 ### 2.0.0
 

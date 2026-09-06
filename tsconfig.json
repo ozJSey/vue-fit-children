@@ -14,5 +14,8 @@
     "forceConsistentCasingInFileNames": true,
     "inlineSources": true
   },
-  "include": ["vFitChildren.ts"]
+  "include": [
+    "vFitChildren.ts",
+    "src/**/*.ts"
+  ]
 }
