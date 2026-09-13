@@ -1,4 +1,8 @@
-# v-fit-children
+# @ozjsey/v-fit-children
+
+## Playground
+
+Try the live examples in the [npm portfolio playground](https://github.com/ozJSey/npm-portfolio-playground).
 
 ## Auto-hide overflowing children, emit the hidden ones for "+N more" badges
 
