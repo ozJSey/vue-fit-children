@@ -57,9 +57,10 @@ export const vFitChildren: Directive<
       containerWidth: Number.POSITIVE_INFINITY,
       data: undefined,
       gapFromOption: undefined,
+      dataMismatch: undefined,
       hostWidth: 0,
       keepVisibleEl: undefined,
-      lastAvailable: 0,
+      lastDispatched: undefined,
       metrics: [],
       mutationObserver: undefined,
       observedChildren: [],
@@ -69,7 +70,6 @@ export const vFitChildren: Directive<
       pass: false,
       appliedAvailable: 0,
       lastApplyMoved: false,
-      lastDispatchedData: undefined,
       oversizedRuns: [],
       resizeObserver: undefined,
       targetElement: element,
@@ -89,13 +89,13 @@ export const vFitChildren: Directive<
         return
       }
       observe(state)
-      recalculate(state, true)
+      recalculate(state)
     })
     mutationObserver.observe(element, { childList: true })
     state.mutationObserver = mutationObserver
 
     observe(state)
-    recalculate(state, true)
+    recalculate(state)
   },
 
   updated(element, binding) {
@@ -113,7 +113,7 @@ export const vFitChildren: Directive<
     if (optionsChanged || setChanged) {
       state.oversizedRuns = []
       observe(state)
-      recalculate(state, true)
+      recalculate(state)
     }
   },
 

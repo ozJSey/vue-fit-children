@@ -1,6 +1,6 @@
 /**
- * When a pass runs and whether it is allowed to re-measure. Every trigger in
- * `observers.ts` and every directive hook funnels through `recalculate`.
+ * When a pass runs. Every trigger in `observers.ts` and every directive hook
+ * funnels through `recalculate`.
  */
 import { EPSILON } from './constants'
 import { ensureHideRule } from './dom'
@@ -17,11 +17,26 @@ import type { FitChildrenState } from './types'
  * directive's `updated` hook is a post-render effect inside the same task.
  * Deferring to the next frame is what made the previous state visible, clipped,
  * in between.
+ *
+ * And no cached pass. 2.2.0 kept the last measurement and, when the row only
+ * narrowed, decided from arithmetic alone — advertised in four places as
+ * "shrinking is free, no DOM is read at all". It was not an optimisation. A
+ * cached pass was allowed to CONFIRM the current run and nothing else, so the
+ * only shrink it saved a measurement on was a shrink that changed nothing;
+ * every shrink that dropped a chip ran the decision twice. What it did buy was
+ * a second source of widths — `observers.ts` storing `ResizeObserver` content
+ * rects, taken with children hidden and excluding a scrollbar `measure.ts`
+ * included — feeding the same `min(host, container)` the fit decision uses.
+ * That is the defect class ARCHITECTURE.md's first invariant exists to forbid,
+ * and it also created the feedback problem the code below then guards against:
+ * a host that sizes to its own children reports a narrower box the instant we
+ * hide something, and a cached pass had no way to know that number was its own
+ * last decision echoing back. Measuring every pass — with every child shown
+ * first — reads the real budget instead of the consequence, and the whole
+ * `remeasure` apparatus goes with it.
  */
-const runPass = (state: FitChildrenState, remeasure: boolean): void => {
-  if (remeasure) {
-    measure(state)
-  }
+const runPass = (state: FitChildrenState): void => {
+  measure(state)
 
   const available = Math.min(state.hostWidth, state.containerWidth)
   const fit = computeFit(
@@ -30,19 +45,6 @@ const runPass = (state: FitChildrenState, remeasure: boolean): void => {
     state.offsetNeededInPx,
     state.gapFromOption,
   )
-
-  // A host that sizes to its own children reports a NEW width the instant we
-  // hide one, and that width is our own last decision echoing back. Subtract
-  // the offset from it and the next pass hides another, then another: measured
-  // at 3 visible -> 0 in five rounds. So a cached pass may only CONFIRM the
-  // current run; anything that would change it re-measures with every child
-  // shown, which reads the real budget instead of the consequence.
-  if (!remeasure && !sameRun(fit.visible, state.visible)) {
-    runPass(state, true)
-    return
-  }
-
-  state.lastAvailable = available
 
   // Feedback through the consumer's own render.
   //
@@ -93,7 +95,7 @@ const runPass = (state: FitChildrenState, remeasure: boolean): void => {
   applyFit(state, fit)
 }
 
-export const recalculate = (state: FitChildrenState, remeasure: boolean): void => {
+export const recalculate = (state: FitChildrenState): void => {
   if (!state.targetElement || state.pass) {
     return
   }
@@ -107,7 +109,7 @@ export const recalculate = (state: FitChildrenState, remeasure: boolean): void =
 
   state.pass = true
   try {
-    runPass(state, remeasure)
+    runPass(state)
   } finally {
     state.pass = false
   }

@@ -1,6 +1,6 @@
 {
   "name": "@ozjsey/v-fit-children",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "Vue directive that auto-hides children that don't fit within a container's width. Useful for chips, badges, tags, and other inline elements in tight spaces.",
   "author": "Ozgur Seyidoglu",
   "license": "MIT",
@@ -29,7 +29,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsup vFitChildren.ts --format esm,cjs --minify --sourcemap --dts --out-dir dist --clean && mv dist/vFitChildren.js dist/vFitChildren.min.js && mv dist/vFitChildren.js.map dist/vFitChildren.min.js.map && mv dist/vFitChildren.cjs dist/vFitChildren.min.cjs && mv dist/vFitChildren.cjs.map dist/vFitChildren.min.cjs.map && mv dist/vFitChildren.d.cts dist/vFitChildren.min.d.cts && node -e \"const fs=require('fs');for(const f of ['vFitChildren.min.js','vFitChildren.min.cjs']){const p='dist/'+f;let s=fs.readFileSync(p,'utf8');s=s.replace(/\\/\\/# sourceMappingURL=vFitChildren\\.(js|cjs)\\.map/, '//# sourceMappingURL='+f+'.map');fs.writeFileSync(p,s);}\"",

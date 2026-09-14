@@ -2,9 +2,16 @@
  * Everything that can tell us the row needs recalculating: the container box,
  * the host box, the parent box, each child's box, and DOM injected outside Vue.
  * All of it only ever calls `recalculate`.
+ *
+ * This module never supplies a width to the decision. A `ResizeObserver` entry
+ * is a SIGNAL that a box moved, read here only to answer "did the geometry
+ * change since we last measured"; the number the fit is computed from comes
+ * from `measure.ts` and from nowhere else. Storing content rects here is how
+ * 2.2.0 ended up with two definitions of the host's width — one that counted a
+ * scrollbar and one that did not, taken in different DOM states, feeding the
+ * same `min(host, container)`.
  */
 import { EPSILON, HIDDEN_ATTR } from './constants'
-import { getContentWidth } from './dom'
 import { recalculate } from './schedule'
 import type { FitChildrenState } from './types'
 
@@ -19,22 +26,21 @@ export const observe = (state: FitChildrenState): void => {
   }
 
   const resizeObserver = new ResizeObserver((entries) => {
-    let remeasure = false
-    let sawBox = false
+    let relevant = false
 
     for (const entry of entries) {
       const target = entry.target as HTMLElement
       const width = entry.contentRect.width
 
       if (target === host) {
-        state.hostWidth = width
-        sawBox = true
+        relevant = true
       } else if (target === state.widthRestrictingContainer) {
         if (Math.abs(width - state.containerWidth) > EPSILON) {
+          // The geometry genuinely changed, so a run frozen out of a feedback
+          // cycle deserves another chance.
           state.oversizedRuns = []
         }
-        state.containerWidth = width
-        sawBox = true
+        relevant = true
       } else if (target === host.parentElement) {
         // A host that sizes to its own children stops tracking the row the
         // moment its content is narrower than the space on offer: widen the row
@@ -44,13 +50,9 @@ export const observe = (state: FitChildrenState): void => {
         // signal, never a budget — it includes any sibling badge, so acting on
         // the number would over-admit; a fresh measurement is what it buys.
         if (Math.abs(width - state.parentWidth) > EPSILON) {
-          // The geometry genuinely changed, so a run frozen out of a feedback
-          // cycle deserves another chance.
           state.oversizedRuns = []
-          remeasure = width > state.parentWidth + EPSILON
         }
-        state.parentWidth = width
-        sawBox = true
+        relevant = true
       } else if (!target.hasAttribute(HIDDEN_ATTR)) {
         // A child, or a sibling, changed size on its own. One we hid reports
         // 0×0 once and then goes quiet, which is our own churn rather than news.
@@ -66,20 +68,13 @@ export const observe = (state: FitChildrenState): void => {
         if (!state.lastApplyMoved) {
           state.oversizedRuns = []
         }
-        remeasure = true
+        relevant = true
       }
     }
 
-    if (!remeasure && !sawBox) {
-      return
+    if (relevant) {
+      recalculate(state)
     }
-
-    // Growing needs fresh widths, because the record's entry for a hidden child
-    // is the last one taken while it was visible and its content may have moved
-    // on since. Shrinking only ever consults children that are visible right
-    // now, so the record is live and the pass costs no DOM reads at all.
-    const available = Math.min(state.hostWidth, state.containerWidth)
-    recalculate(state, remeasure || available > state.lastAvailable + EPSILON)
   })
 
   resizeObserver.observe(host)
@@ -111,13 +106,6 @@ export const observe = (state: FitChildrenState): void => {
 }
 
 /**
- * Vue invokes `updated` on every patch of the host, not only when the child set
- * changes, so an unrelated re-render would otherwise cost a full measure pass.
- * Comparing the live children against the ones we observed is exact and needs
- * no vnode work: a child whose *content* changed keeps its identity, and the
- * per-child ResizeObserver is what reports that.
- */
-/**
  * Whether the host's siblings changed identity — a "+N" badge appearing or
  * leaving via `v-if`. That badge's arrival is usually caused by our own event,
  * and its width comes straight out of the row, so it has to be picked up and
@@ -137,6 +125,13 @@ export const siblingsChanged = (state: FitChildrenState): boolean => {
   return current.some((el, index) => el !== state.observedSiblings[index])
 }
 
+/**
+ * Vue invokes `updated` on every patch of the host, not only when the child set
+ * changes, so an unrelated re-render would otherwise cost a full measure pass.
+ * Comparing the live children against the ones we observed is exact and needs
+ * no vnode work: a child whose *content* changed keeps its identity, and the
+ * per-child ResizeObserver is what reports that.
+ */
 export const childrenChanged = (state: FitChildrenState): boolean => {
   const host = state.targetElement
   if (!host) {

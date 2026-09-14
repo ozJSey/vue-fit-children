@@ -72,6 +72,22 @@ export const computeFit = (
     visible.add(metric.element)
   }
 
+  // A decorative child is punctuation BETWEEN two others. Left at the end of
+  // the run it introduces nothing, and the row reads `Ada · Grace · Alan ·` —
+  // which is what the canonical demo for the feature rendered. Trimming it is
+  // free: it is already an element the consumer told us carries no meaning of
+  // its own, and dropping it can only give the row back width.
+  for (let index = metrics.length - 1; index >= 0; index--) {
+    const metric = metrics[index]
+    if (!visible.has(metric.element)) {
+      continue
+    }
+    if (!metric.isDecorative || metric.isKept) {
+      break
+    }
+    visible.delete(metric.element)
+  }
+
   // Reaching here means the content does not fit the available width, which is
   // true whether or not anything could be hidden about it. Deriving this from
   // "did we hide something" reports `fits` for a row of entirely pinned

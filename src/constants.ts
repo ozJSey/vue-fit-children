@@ -14,8 +14,9 @@ export const STYLE_ATTR = 'data-v-fit-style'
 export const EVENT_NAME = 'fit-children-updated'
 
 /**
- * Sub-pixel slack. Layout resolves to 1/64px, so an exact `<=` can reject a run
- * that fits by 0.002px and drop a whole chip. Half a pixel is far below any real
- * child, so it can never admit one that genuinely overflows.
+ * Sub-pixel slack. Layout resolves to 1/64px (0.015625), and a row is a sum of
+ * a dozen such quantities, so an exact `<=` can reject a run that misses by a
+ * few thousandths of a pixel and drop a whole chip. Half a pixel is far below
+ * any real child, so it can never admit one that genuinely overflows.
  */
 export const EPSILON = 0.5

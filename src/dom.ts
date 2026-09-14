@@ -1,14 +1,12 @@
 /**
- * Every DOM read and every DOM write that is not the fit decision itself:
- * how a child is hidden, how "the consumer hid it" is answered, and how a
- * content width is measured.
+ * The hiding mechanism and the three questions asked about a child: did the
+ * consumer hide it, is it pinned, is it one of the consumer's `data` items.
+ *
+ * No layout is read here. Every measurement in the package lives in
+ * `measure.ts` — see ARCHITECTURE.md, and `architecture.test.ts`, which fails
+ * if a layout API appears in any other module.
  */
-import {
-  DECORATIVE_ATTR,
-  HIDDEN_ATTR,
-  KEEP_ATTR,
-  STYLE_ATTR,
-} from './constants'
+import { DECORATIVE_ATTR, HIDDEN_ATTR, KEEP_ATTR, STYLE_ATTR } from './constants'
 
 // ── Hiding ───────────────────────────────────────────────────────────
 //
@@ -54,20 +52,9 @@ export const showChild = (child: HTMLElement): void => {
 export const isConsumerHidden = (child: HTMLElement): boolean =>
   child.style.display === 'none'
 
-// ── Helpers ──────────────────────────────────────────────────────────
+// ── The two independent questions ────────────────────────────────────
 
-export const parsePx = (value: string): number => parseFloat(value) || 0
-
-export const getContentWidth = (
-  element: HTMLElement,
-  style = window.getComputedStyle(element),
-): number =>
-  element.getBoundingClientRect().width -
-  parsePx(style.borderLeftWidth) -
-  parsePx(style.borderRightWidth) -
-  parsePx(style.paddingLeft) -
-  parsePx(style.paddingRight)
-
+/** Never hide this one, wherever it sits. */
 export const isKeptChild = (
   child: HTMLElement,
   keepVisibleEl: HTMLElement | undefined,
@@ -76,9 +63,16 @@ export const isKeptChild = (
   (!!keepVisibleEl &&
     (child === keepVisibleEl || child.contains(keepVisibleEl)))
 
-export const isDataChild = (
-  child: HTMLElement,
-  keepVisibleEl: HTMLElement | undefined,
-): boolean =>
-  !child.hasAttribute(DECORATIVE_ATTR) &&
-  !(keepVisibleEl && (child === keepVisibleEl || child.contains(keepVisibleEl)))
+/**
+ * This one is a `data` item, so it consumes a `data` index.
+ *
+ * Membership is DECLARED — one attribute, `data-v-fit-decorative` — and is not
+ * inferred from anything else. Pinning used to remove a child from the index
+ * when it was pinned by `keepVisibleEl` and not when it was pinned by
+ * `data-v-fit-keep`, so the two documented ways to pin the same child produced
+ * different `hiddenData` for the same row (FIT-1 F3). Pinning is about
+ * visibility; membership is about your array. They are unrelated, and a child
+ * that is pinned *and* not one of your items says both.
+ */
+export const isDataChild = (child: HTMLElement): boolean =>
+  !child.hasAttribute(DECORATIVE_ATTR)

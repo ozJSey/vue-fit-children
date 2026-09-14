@@ -24,9 +24,7 @@ export type FitChildrenFitState = 'fits' | 'overflowing'
 
 /**
  * One child's contribution to the row, measured while every child was visible.
- * Kept between passes so a shrinking container costs no DOM reads at all.
  */
-
 export type ChildMetric = {
   /**
    * The element IS the identity. Comparing runs by position breaks the moment
@@ -51,15 +49,33 @@ export type ChildMetric = {
    */
   marginAfter: number
   isKept: boolean
+  /**
+   * Carries `data-v-fit-decorative`: a separator, a pinned control, anything
+   * that is not one of the consumer's `data` items. Two consequences, and only
+   * these two — it consumes no `data` index, and it is never left trailing a
+   * visible run with nothing after it to introduce.
+   */
+  isDecorative: boolean
 }
 
 export type FitChildrenState<T = unknown> = {
   containerWidth: number
   data: T[] | undefined
+  /**
+   * Signature of the last `data`-to-children mismatch warned about, so a resize
+   * drag reports a broken 1:1 mapping once rather than sixty times a second.
+   */
+  dataMismatch: string | undefined
   gapFromOption: number | undefined
   hostWidth: number
   keepVisibleEl: HTMLElement | undefined
-  lastAvailable: number
+  /**
+   * The last event payload, or `undefined` before the first dispatch. The
+   * dispatch gate compares against THIS rather than against a proxy for it:
+   * anything a listener can observe changing is a reason to dispatch, and
+   * nothing else is. See `visibility.ts`.
+   */
+  lastDispatched: FitChildrenEventDetail | undefined
   metrics: ChildMetric[]
   mutationObserver: MutationObserver | undefined
   observedChildren: HTMLElement[]
@@ -69,7 +85,6 @@ export type FitChildrenState<T = unknown> = {
   pass: boolean
   appliedAvailable: number
   lastApplyMoved: boolean
-  lastDispatchedData: unknown[] | undefined
   oversizedRuns: { run: Set<HTMLElement>; available: number }[]
   resizeObserver: ResizeObserver | undefined
   targetElement: HTMLElement | undefined
