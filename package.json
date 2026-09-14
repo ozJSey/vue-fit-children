@@ -6,11 +6,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ozJSey/vue-fit-children.git"
+    "url": "git+https://github.com/ozjsey/vue-fit-children.git"
   },
-  "homepage": "https://github.com/ozJSey/vue-fit-children#readme",
+  "homepage": "https://github.com/ozjsey/vue-fit-children#readme",
   "bugs": {
-    "url": "https://github.com/ozJSey/vue-fit-children/issues"
+    "url": "https://github.com/ozjsey/vue-fit-children/issues"
   },
   "type": "module",
   "main": "dist/vFitChildren.min.js",
