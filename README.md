@@ -2,9 +2,13 @@
 
 See in action: [npm portfolio playground](https://ozjsey.github.io/npm-portfolio-playground/#v-fit-children).
 
-## Playground
-
-Try the live examples in the [npm portfolio playground](https://github.com/ozJSey/npm-portfolio-playground).
+**Or go straight to the card** — drag the width slider on any of them:
+[chips with a +N badge](https://ozjsey.github.io/npm-portfolio-playground/#v-fit-children/basic) ·
+[data mapping](https://ozjsey.github.io/npm-portfolio-playground/#v-fit-children/data-mapping) ·
+[pinned children](https://ozjsey.github.io/npm-portfolio-playground/#v-fit-children/keep-visible) ·
+[inline badge](https://ozjsey.github.io/npm-portfolio-playground/#v-fit-children/inline-badge) ·
+[the state attribute](https://ozjsey.github.io/npm-portfolio-playground/#v-fit-children/state-attribute) ·
+[the event contract](https://ozjsey.github.io/npm-portfolio-playground/#v-fit-children/event-contract)
 
 ## Auto-hide overflowing children, emit the hidden ones for "+N more" badges
 
@@ -63,6 +67,8 @@ app.mount("#app");
 ```
 
 ## Quick start
+
+> [Chips with a +N more badge](https://ozjsey.github.io/npm-portfolio-playground/#v-fit-children/basic) is this snippet with a width slider on it.
 
 ```vue
 <script setup lang="ts">
@@ -170,6 +176,8 @@ function onUpdate(e: CustomEvent<FitChildrenEventDetail<Tag>>) {
 
 ## Event
 
+> [The event reports what is true now](https://ozjsey.github.io/npm-portfolio-playground/#v-fit-children/event-contract) — starting at a width where nothing fits, so the first pass has to dispatch too — and [isOverflowing on a row that cannot hide anything](https://ozjsey.github.io/npm-portfolio-playground/#v-fit-children/pinned-overflow).
+
 The directive dispatches a `fit-children-updated` custom event on the directive's element whenever visibility is recalculated.
 
 ```vue
@@ -201,6 +209,8 @@ optional: hiding a child is itself a resize, so a listener rendering a badge fro
 otherwise loop forever.
 
 ## Keeping elements visible
+
+> [Pinned children](https://ozjsey.github.io/npm-portfolio-playground/#v-fit-children/keep-visible) — `keepVisibleEl` and `data-v-fit-keep` surviving the cull, and [v-show children are left alone](https://ozjsey.github.io/npm-portfolio-playground/#v-fit-children/v-show) for the child you hid yourself.
 
 You can prevent specific children from being hidden. This is useful for inputs, buttons, or any interactive element that should always remain accessible.
 
@@ -251,6 +261,8 @@ Both methods can be used together, and they are interchangeable: pinning a child
 
 ## Data mapping
 
+> [data → hiddenData + hiddenIndices](https://ozjsey.github.io/npm-portfolio-playground/#v-fit-children/data-mapping), and [decorative separators outside the mapping](https://ozjsey.github.io/npm-portfolio-playground/#v-fit-children/decorative) for the children that must not consume a data index.
+
 Pass your `v-for` array via the `data` option to receive the corresponding data objects for hidden children in the event:
 
 ```vue
@@ -295,6 +307,8 @@ The `data` array must map 1:1 with the directive's immediate children that are n
 `hiddenIndices` is always provided regardless of the `data` option, but it holds **DOM child positions** — it counts decorative children and `v-show`-hidden children, which `hiddenData` skips. The two index spaces coincide only in a row that is a straight `v-for` with nothing else in it. `myArray[hiddenIndices[0]]` names the wrong item the moment you add a separator; use `hiddenData` for that, and `hiddenIndices` for reaching back into the DOM.
 
 ## Inline "+N" badge
+
+> [Inline badge with offsetNeededInPx: 0](https://ozjsey.github.io/npm-portfolio-playground/#v-fit-children/inline-badge).
 
 To keep the badge inline with the chips (instead of below), wrap both in a flex container and give the directive element `flex: 1`:
 
@@ -355,6 +369,8 @@ Children are hidden with the `data-v-fit-hidden` attribute plus a single rule th
 > **Strict CSP.** A `style-src` without `'unsafe-inline'` blocks the injected sheet, and hiding then stops working **silently** — no error, children simply overflow. Ship the rule above in your own CSS and the injection becomes a harmless no-op.
 
 ## Attributes
+
+> [CSS-only styling via data-v-fit-state](https://ozjsey.github.io/npm-portfolio-playground/#v-fit-children/state-attribute) — style the overflow state without an event handler.
 
 | Attribute | On | Meaning |
 |---|---|---|
