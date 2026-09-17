@@ -27,12 +27,24 @@ export const observe = (state: FitChildrenState): void => {
 
   const resizeObserver = new ResizeObserver((entries) => {
     let relevant = false
+    /**
+     * The host reporting MORE room than the last measurement gave it. Our own
+     * output cannot produce that number: every pass measures with every child
+     * SHOWN, so a host that sizes to its own children is already read at its
+     * widest, and hiding can only take width off it from there. Growth past
+     * that reading is the world — a sidebar closing, a splitter dragged back, a
+     * class coming off.
+     */
+    let hostGrew = false
+    /** Whether any OTHER observed box moved in the same delivery. */
+    let elsewhereMoved = false
 
     for (const entry of entries) {
       const target = entry.target as HTMLElement
       const width = entry.contentRect.width
 
       if (target === host) {
+        hostGrew = width > state.hostWidth + EPSILON
         relevant = true
       } else if (target === state.widthRestrictingContainer) {
         if (Math.abs(width - state.containerWidth) > EPSILON) {
@@ -40,6 +52,7 @@ export const observe = (state: FitChildrenState): void => {
           // cycle deserves another chance.
           state.oversizedRuns = []
         }
+        elsewhereMoved = true
         relevant = true
       } else if (target === host.parentElement) {
         // A host that sizes to its own children stops tracking the row the
@@ -52,6 +65,7 @@ export const observe = (state: FitChildrenState): void => {
         if (Math.abs(width - state.parentWidth) > EPSILON) {
           state.oversizedRuns = []
         }
+        elsewhereMoved = true
         relevant = true
       } else if (!target.hasAttribute(HIDDEN_ATTR)) {
         // A child, or a sibling, changed size on its own. One we hid reports
@@ -68,8 +82,31 @@ export const observe = (state: FitChildrenState): void => {
         if (!state.lastApplyMoved) {
           state.oversizedRuns = []
         }
+        elsewhereMoved = true
         relevant = true
       }
+    }
+
+    // The host is the one box with no branch of its own above, because by
+    // itself it cannot say WHY it moved: a shrink-to-fit host narrows because
+    // we hid a child, and a host in a flex row narrows because a "+N" badge
+    // beside it widened — both of those are our own output coming back, and
+    // clearing the record on either reopens the cycle `schedule.ts` guards.
+    // Through 2.3.0 it therefore cleared nothing at all, which froze the row:
+    // a host narrowed by the WORLD filed the run it was showing as "proven too
+    // big", and nothing on the host path ever retracted it, so returning to the
+    // width those children had always fitted at re-applied the collapsed run
+    // forever — with `data-v-fit-state` reading `fits` over it.
+    //
+    // Two facts make the honest half of that recoverable. Our feedback can only
+    // ever take width OFF the host relative to the measurement (which is taken
+    // with every child shown), so growth past it is never ours. And feedback
+    // always arrives WITH the box that carried it — the badge that relabelled,
+    // the container that narrowed — in the same delivery, because one layout
+    // produces one callback. A host that grew alone is the world, and the
+    // record describes a layout that no longer exists.
+    if (hostGrew && !elsewhereMoved) {
+      state.oversizedRuns = []
     }
 
     if (relevant) {

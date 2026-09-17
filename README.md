@@ -386,7 +386,7 @@ Children are hidden with the `data-v-fit-hidden` attribute plus a single rule th
 - **A consumer-hidden child is detected by inline `display: none`** (what `v-show` sets). Hiding a child with a CSS class instead is not detected.
 - **`keepVisibleEl` accepts a single element.** Use `data-v-fit-keep` for multiple. Pinned children are never hidden, so if they alone exceed the width they overflow rather than vanish — the honest failure for something the user is interacting with.
 - **SSR.** No markup is added, so hydration cannot mismatch, but the server sends every child visible and the first client paint shows them all until `mounted` runs.
-- **A "+N" badge whose *width* depends on what is hidden** makes the directive's output its own input. That is handled — runs which do not survive being chosen are remembered and not re-entered — but such a layout can settle below the theoretical maximum. Reserving constant space for the badge (`offsetNeededInPx`, or padding on the host) avoids the loop entirely.
+- **A "+N" badge whose *width* depends on what is hidden** makes the directive's output its own input. That is handled — runs which do not survive being chosen are remembered and not re-entered — but such a layout can settle below the theoretical maximum. Reserving constant space for the badge (`offsetNeededInPx`, or padding on the host) avoids the loop entirely. The memory is retracted the moment the world moves the row: any genuine change to the width-restricting container, the host's parent or a sibling clears it, and so does the host reporting more room than the last measurement gave it with nothing else resizing beside it — a sidebar closing or a splitter dragged back is not the loop, and 2.3.0 froze the row because the host path made no such distinction.
 
 ## Browser support
 
@@ -396,7 +396,7 @@ Requires browsers that support `ResizeObserver`, `MutationObserver`, and `getBou
 
 Full history, with the evidence behind each entry, is in [`CHANGELOG.md`](./CHANGELOG.md).
 
-### 2.3.0 — unreleased
+### 2.3.0 — 2026-09-14
 
 **The row it computes was never the problem; what it *told* you about the row was.** An independent
 audit drove the published 2.2.0 through 2,193 measurements and found zero half-clipped children.

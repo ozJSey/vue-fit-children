@@ -1314,7 +1314,11 @@ describe("a badge whose WIDTH comes from the hidden count", () => {
    */
   const BADGE_WIDTH: Record<number, number> = { 0: 0, 1: 30, 2: 160, 3: 40, 4: 40, 5: 40 };
 
-  function buildFeedbackRow(chipCount: number, rowWidth: number) {
+  function buildFeedbackRow(
+    chipCount: number,
+    rowWidth: number,
+    { withHostEntry = false }: { withHostEntry?: boolean } = {},
+  ) {
     const frame = document.createElement("div");
     const host = document.createElement("div");
     host.dataset.host = "";
@@ -1349,7 +1353,11 @@ describe("a badge whose WIDTH comes from the hidden count", () => {
       if (badge) WIDTHS.set(badge, wanted);
       hostWidth = rowWidth - wanted;
       update(host, { offsetNeededInPx: 0 });
-      if (badge) MockResizeObserver.latest().trigger([badge]);
+      if (badge) {
+        MockResizeObserver.latest().trigger(
+          withHostEntry ? [badge, host] : [badge],
+        );
+      }
     };
 
     /** Drain the queue the way a framework flush would, with a runaway cap. */
@@ -1399,5 +1407,99 @@ describe("a badge whose WIDTH comes from the hidden count", () => {
     hostWidth = 900;
     MockResizeObserver.latest().trigger([row.host]);
     expect(visibleCount(row.host)).toBeGreaterThan(narrow);
+  });
+
+  it("settles even when the host's own entry arrives beside the badge's", () => {
+    // The shape a real browser delivers. Hiding a chip narrows a shrink-to-fit
+    // host AND relabels the badge in the same layout, so the two entries land
+    // in ONE ResizeObserver callback — and when the badge gives room back the
+    // host's entry reports growth. FIT-2 made a lone host entry clear the
+    // record of runs that proved too big; if that had been every host entry,
+    // this is the loop it would have reopened.
+    const row = buildFeedbackRow(5, 400, { withHostEntry: true });
+    mount(row.host, { offsetNeededInPx: 0 });
+    row.settle();
+
+    expect(row.rounds.length).toBeGreaterThanOrEqual(3);
+    expect(row.rounds.length).toBeLessThan(20);
+    const shown = visibleCount(row.host);
+    expect(shown).toBeGreaterThan(0);
+    expect(shown * 100 + row.badgeWidth).toBeLessThanOrEqual(400);
+  });
+});
+
+// ── FIT-2: a host-only resize round-trip ─────────────────────────────
+
+describe("FIT-2: the host alone is resized down and back", () => {
+  /**
+   * Every branch in `observers.ts` except the host's clears `oversizedRuns`
+   * when its box genuinely moved. The host's did not — so a sidebar, a splitter
+   * or a class toggle that narrows ONLY the host got its pre-shrink run filed as
+   * "proven too big at 300px", and the guard then refused to re-enter that run
+   * forever, at the exact width where it had always fitted.
+   *
+   * The row is a bare `v-fit-children` with no options: the default binding.
+   */
+  const record = (host: HTMLElement) => {
+    const seen: {
+      state: string | null;
+      isOverflowing: boolean;
+      hiddenInDom: number;
+      hiddenSaid: number;
+    }[] = [];
+    host.addEventListener(EVENT, (e) => {
+      const detail = (e as CustomEvent<FitChildrenEventDetail>).detail;
+      seen.push({
+        state: host.getAttribute("data-v-fit-state"),
+        isOverflowing: detail.isOverflowing,
+        hiddenInDom: hiddenOf(host).length,
+        hiddenSaid: detail.hiddenChildrenCount,
+      });
+    });
+    return seen;
+  };
+
+  it("puts every chip back when the host returns to the width they always fitted at", () => {
+    const host = buildRow([100, 100, 100], 300);
+    mount(host);
+    expect(visibleCount(host)).toBe(3);
+
+    // The world narrows the host — parent and siblings unmoved, so the only
+    // entry that arrives is the host's.
+    hostWidth = 150;
+    MockResizeObserver.latest().trigger([host]);
+    expect(visibleCount(host)).toBe(1);
+
+    hostWidth = 300;
+    MockResizeObserver.latest().trigger([host]);
+    expect(visibleCount(host)).toBe(3);
+    expect(host.getAttribute("data-v-fit-state")).toBe("fits");
+  });
+
+  it("never reports a state attribute and an event that contradict each other", () => {
+    const host = buildRow([100, 100, 100], 300);
+    const seen = record(host);
+    mount(host);
+
+    for (const width of [150, 300, 150, 300, 150, 300, 150, 300]) {
+      hostWidth = width;
+      MockResizeObserver.latest().trigger([host]);
+    }
+
+    // Negative control: a sweep that never hid anything cannot contradict
+    // itself, so it has to have gone both ways to mean anything.
+    expect(seen.some((s) => s.hiddenInDom > 0)).toBe(true);
+    expect(seen.some((s) => s.hiddenInDom === 0)).toBe(true);
+
+    const contradictions = seen.filter(
+      (s) =>
+        s.isOverflowing !== (s.state === "overflowing") ||
+        s.hiddenSaid !== s.hiddenInDom ||
+        (s.state === "fits" && s.hiddenInDom > 0),
+    );
+    expect(contradictions).toEqual([]);
+
+    // And the row itself really did come back, every time.
+    expect(visibleCount(host)).toBe(3);
   });
 });

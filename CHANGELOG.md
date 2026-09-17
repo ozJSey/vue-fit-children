@@ -22,9 +22,67 @@ Entries for 2.2.0 and earlier are **reproduced from the README changelog**, whic
 only record before this file existed. They have not been independently re-verified; where the 2.3.0
 entries contradict them, 2.3.0 is the measured one — see "2.2.0 claims this file corrects" below.
 
-## [2.3.0] — unreleased
+## [2.3.1] — 2026-09-17
 
-Built locally, **not published**. npm's `latest` is 2.2.0.
+Supersedes 2.3.0 (published 2026-09-14). Release state is verified against `registry.npmjs.org`
+by `node scripts/changelog-audit.mjs`, not against this file.
+
+### Fixed
+
+- **A host-only resize round trip froze the row forever, while `data-v-fit-state` read `fits`.**
+  (FIT-2, P0 — every consumer of 2.3.0 has this today; the published `dist` is byte-identical to a
+  local build, sha256 `5e49c1b1…`.)
+
+  `schedule.ts` remembers runs that "did not survive being chosen" so a **"+N" badge whose label
+  changes its own width** cannot cycle forever — the loop documented under Known limitations. The
+  record was created from the fresh measurement alone, and the fresh measurement cannot tell a badge
+  taking width out of the row from a **sidebar, splitter or class toggle narrowing the host itself**.
+  Every other trigger in `observers.ts` retracted such a record when its box genuinely moved — the
+  width-restricting container, the host's parent, a sibling — and the host's branch retracted
+  nothing. So the run that was on screen when the host shrank was filed as "proven too big at the
+  width it was chosen at", and returning to exactly that width re-applied the collapsed run instead:
+
+  > `600px → 200px → 600px`, a bare `v-fit-children` over nine chips, driven in Chrome against the
+  > published 2.3.0: **2 of 9 chips at 600px, where all nine fit**, `data-v-fit-state="fits"`, and
+  > the event saying `isOverflowing: false` with `hiddenChildrenCount: 7`. Repeated drags froze up
+  > to four widths at once (`oversizedRuns` keeps the last four). Nothing recovered a static row —
+  > the host's entries never cleared, hidden children emit no `ResizeObserver` entries, and the
+  > frozen pass's own un-hide/re-hide nets to none.
+
+  The guard is **narrowed, not removed**: the host branch now retracts the record only when the host
+  reports **more** room than the last measurement gave it *and* no other observed box moved in the
+  same `ResizeObserver` delivery. Both halves are load-bearing. Every pass measures with each child
+  shown, so the host is already read at its widest and our own hiding can only take width off it —
+  growth past that reading is never our output coming back. And feedback always arrives *with* the
+  box that carried it, because one layout produces one callback, so a host that grew alone is the
+  world. The badge loop stays closed: its unit tests ("settles rather than cycling forever", "still
+  lets the row grow back when the row itself gets wider") are unchanged and green, and a third now
+  delivers the host's entry beside the badge's — the shape a browser actually produces — where
+  dropping the second half of the condition sends the row into a 40-round runaway.
+
+  Three gates see it, all of them against the published artifact rather than a mock:
+  `pnpm geometry:dist` reports 6 defects on playground card 12 (`contradiction at <Put it back>:
+  data-v-fit-state="fits" while 7 children carry data-v-fit-hidden`) where `pnpm geometry` on the
+  fixed source is clean over 609 host measurements; `ONLY=12-host-resize pnpm interactions:dist`
+  fails both FIT-2 checks (`FROZEN at 200,300,240,180`) where the source passes; and the unit repro
+  fails with `expected 1 to be 3` while the state attribute assertion above it still passes.
+
+### Added
+
+- Playground card 12, **"The host alone is resized, down and back"** — a bare binding whose frame is
+  fixed and whose host carries the only width the slider touches, which is the one shape in the tab
+  that produces a lone host `ResizeObserver` entry. Cards 1 and 5, where the badge sits in the row,
+  could not express this.
+
+## [2.3.0] — 2026-09-14
+
+Published to npm at 2026-09-14T10:01:48Z (registry metadata).
+
+> The tarball that shipped carries a CHANGELOG and a README whose heading for this version both
+> read `2.3.0 — unreleased / Built locally, not published. npm's latest is 2.2.0`. Every word of
+> that was true when it was written and none of it was revisited at publish time, so the npm page
+> for 2.3.0 tells its readers that 2.3.0 does not exist. Corrected here; `scripts/publish.mjs` now
+> refuses a tarball that does it again (DOC-1).
 
 The engine is not what changed. An independent audit drove the published 2.2.0 through 2,193
 measurements and found zero half-clipped children, worst overshoot +0.5px inside its own `EPSILON`,
@@ -178,9 +236,10 @@ package brief (`instructions/v-fit-children.md`) and the repository's `CLAUDE.md
 - *"`isOverflowing` reported `fits` for a row of entirely pinned children that was visibly
   clipped"* — fixed on the mount pass only; the resize path was still wrong.
 
-## [2.2.0] — 2026-08
+## [2.2.0] — 2026-09-06
 
-*Reproduced from the README changelog; not independently re-verified.*
+*Reproduced from the README changelog; not independently re-verified. The heading previously read
+`2026-08`; the registry publishes it at 2026-09-06T17:33:16Z.*
 
 First release under the `@ozjsey` scope. The unscoped `v-fit-children` package stops here.
 

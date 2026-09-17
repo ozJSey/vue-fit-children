@@ -65,6 +65,17 @@ and two of the three were being broken at the time.
   to answer "did the geometry change since we last measured", and the host's parent is watched
   purely as a growth signal — its width includes any sibling badge, so it is never a budget.
 
+  What it does own is the retraction. That record is a claim about a layout, and every trigger
+  retracts it when its own box genuinely moves: the container, the parent, a sibling. The host is
+  the exception, because on its own it cannot say *why* it moved — hiding a child narrows a
+  shrink-to-fit host, and a badge widening narrows a host in a flex row, both of which are the
+  record's own subject matter. Through 2.3.0 it therefore retracted nothing, and a host narrowed by
+  the WORLD froze the row at the width its children had always fitted at (FIT-2). The narrowing that
+  fixed it rests on two facts and needs both: our own output can only ever take width OFF the host
+  relative to a measurement taken with every child shown, so growth past that reading is never ours;
+  and feedback always arrives WITH the box that carried it, because one layout produces one
+  callback. A host that grew alone is the world.
+
 Copy-paste consumers: every file under `src/` plus the entry is self-contained TypeScript with no
 dependencies beyond the `vue` peer — take the folder as-is. `architecture.test.ts` comes with it and
 needs only Vitest; it is what tells you if a later edit broke one of the three rules above.
