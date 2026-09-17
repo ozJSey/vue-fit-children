@@ -22,6 +22,13 @@ Entries for 2.2.0 and earlier are **reproduced from the README changelog**, whic
 only record before this file existed. They have not been independently re-verified; where the 2.3.0
 entries contradict them, 2.3.0 is the measured one — see "2.2.0 claims this file corrects" below.
 
+## 2.3.2 — 2026-09-18
+
+Documentation only; no code change. The README is cut to a landing page — problem, solution,
+install, a couple of usage examples — because the playground now carries the reference: every
+option driven in a real browser rather than described in a table. Claims that could not be
+verified against the source were deleted rather than carried across.
+
 ## [2.3.1] — 2026-09-17
 
 Supersedes 2.3.0 (published 2026-09-14). Release state is verified against `registry.npmjs.org`
